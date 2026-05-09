@@ -11,8 +11,22 @@ import SwiftData
 @Model
 final class Item {
     var timestamp: Date
+    var title: String = "Untitled"
+    var isProject: Bool = false
+    var projectPath: String?
+    var parentProjectPath: String?
     
-    init(timestamp: Date) {
+    init(
+        timestamp: Date,
+        title: String,
+        isProject: Bool = false,
+        projectPath: String? = nil,
+        parentProjectPath: String? = nil
+    ) {
         self.timestamp = timestamp
+        self.title = title
+        self.isProject = isProject
+        self.projectPath = projectPath
+        self.parentProjectPath = parentProjectPath
     }
 }

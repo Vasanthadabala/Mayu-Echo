@@ -25,7 +25,7 @@ struct Mayu_EchoApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            ChatView()
         }
         .modelContainer(sharedModelContainer)
     }
