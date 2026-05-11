@@ -6,6 +6,12 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		6AF100012FAC000100000001 /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = 6AF100012FAC000100000006 /* MLXLLM */; };
+		6AF100012FAC000100000002 /* MLXLMCommon in Frameworks */ = {isa = PBXBuildFile; productRef = 6AF100012FAC000100000007 /* MLXLMCommon */; };
+		6AF100012FAC000100000003 /* Tokenizers in Frameworks */ = {isa = PBXBuildFile; productRef = 6AF100012FAC000100000008 /* Tokenizers */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		6A5BBEDE2FAB9A7400BF0EFC /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -52,6 +58,9 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				6AF100012FAC000100000001 /* MLXLLM in Frameworks */,
+				6AF100012FAC000100000002 /* MLXLMCommon in Frameworks */,
+				6AF100012FAC000100000003 /* Tokenizers in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -112,6 +121,9 @@
 			);
 			name = "Mayu Echo";
 			packageProductDependencies = (
+				6AF100012FAC000100000006 /* MLXLLM */,
+				6AF100012FAC000100000007 /* MLXLMCommon */,
+				6AF100012FAC000100000008 /* Tokenizers */,
 			);
 			productName = "Mayu Echo";
 			productReference = 6A5BBECE2FAB9A7300BF0EFC /* Mayu Echo.app */;
@@ -195,6 +207,10 @@
 			);
 			mainGroup = 6A5BBEC52FAB9A7300BF0EFC;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				6AF100012FAC000100000004 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */,
+				6AF100012FAC000100000005 /* XCRemoteSwiftPackageReference "swift-transformers" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 6A5BBECF2FAB9A7300BF0EFC /* Products */;
 			projectDirPath = "";
@@ -400,6 +416,7 @@
 				DEVELOPMENT_TEAM = 4R2U97FG78;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -432,6 +449,7 @@
 				DEVELOPMENT_TEAM = 4R2U97FG78;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -573,6 +591,43 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		6AF100012FAC000100000004 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/ml-explore/mlx-swift-lm";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 3.31.3;
+			};
+		};
+		6AF100012FAC000100000005 /* XCRemoteSwiftPackageReference "swift-transformers" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/huggingface/swift-transformers";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.3.2;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		6AF100012FAC000100000006 /* MLXLLM */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 6AF100012FAC000100000004 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */;
+			productName = MLXLLM;
+		};
+		6AF100012FAC000100000007 /* MLXLMCommon */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 6AF100012FAC000100000004 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */;
+			productName = MLXLMCommon;
+		};
+		6AF100012FAC000100000008 /* Tokenizers */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 6AF100012FAC000100000005 /* XCRemoteSwiftPackageReference "swift-transformers" */;
+			productName = Tokenizers;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 6A5BBEC62FAB9A7300BF0EFC /* Project object */;
 }
