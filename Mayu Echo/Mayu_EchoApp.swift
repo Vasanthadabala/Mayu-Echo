@@ -10,6 +10,8 @@ import SwiftData
 
 @main
 struct Mayu_EchoApp: App {
+    @StateObject private var appSettings = AppSettings()
+
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
             Item.self,
@@ -27,6 +29,8 @@ struct Mayu_EchoApp: App {
     var body: some Scene {
         WindowGroup {
             ChatView()
+                .environmentObject(appSettings)
+                .preferredColorScheme(appSettings.colorScheme.swiftUIColorScheme)
         }
         .modelContainer(sharedModelContainer)
     }

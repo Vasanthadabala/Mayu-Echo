@@ -8,7 +8,10 @@ nonisolated struct LLMModel: Identifiable, Codable, Hashable, Sendable {
     var localPath: String?
     var contextLength: Int
     var isDownloaded: Bool
+    var isLoaded: Bool
     var isRecommendedForCoding: Bool
+    var statusDescription: String?
+    var apiProviderConfigID: String?
 
     init(
         id: String,
@@ -18,7 +21,10 @@ nonisolated struct LLMModel: Identifiable, Codable, Hashable, Sendable {
         localPath: String? = nil,
         contextLength: Int = 0,
         isDownloaded: Bool = false,
-        isRecommendedForCoding: Bool = false
+        isLoaded: Bool = false,
+        isRecommendedForCoding: Bool = false,
+        statusDescription: String? = nil,
+        apiProviderConfigID: String? = nil
     ) {
         self.id = id
         self.displayName = displayName
@@ -27,11 +33,46 @@ nonisolated struct LLMModel: Identifiable, Codable, Hashable, Sendable {
         self.localPath = localPath
         self.contextLength = contextLength
         self.isDownloaded = isDownloaded
+        self.isLoaded = isLoaded
         self.isRecommendedForCoding = isRecommendedForCoding
+        self.statusDescription = statusDescription
+        self.apiProviderConfigID = apiProviderConfigID
     }
 
-    enum Provider: String, Codable, Hashable, Sendable {
+    enum Provider: String, Codable, CaseIterable, Hashable, Sendable {
         case mlx = "MLX"
+        case llamaCpp = "llama.cpp"
+        case api = "API"
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case displayName
+        case provider
+        case repository
+        case localPath
+        case contextLength
+        case isDownloaded
+        case isLoaded
+        case isRecommendedForCoding
+        case statusDescription
+        case apiProviderConfigID
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+
+        id = try container.decode(String.self, forKey: .id)
+        displayName = try container.decode(String.self, forKey: .displayName)
+        provider = try container.decodeIfPresent(Provider.self, forKey: .provider) ?? .mlx
+        repository = try container.decode(String.self, forKey: .repository)
+        localPath = try container.decodeIfPresent(String.self, forKey: .localPath)
+        contextLength = try container.decodeIfPresent(Int.self, forKey: .contextLength) ?? 0
+        isDownloaded = try container.decodeIfPresent(Bool.self, forKey: .isDownloaded) ?? false
+        isLoaded = try container.decodeIfPresent(Bool.self, forKey: .isLoaded) ?? false
+        isRecommendedForCoding = try container.decodeIfPresent(Bool.self, forKey: .isRecommendedForCoding) ?? false
+        statusDescription = try container.decodeIfPresent(String.self, forKey: .statusDescription)
+        apiProviderConfigID = try container.decodeIfPresent(String.self, forKey: .apiProviderConfigID)
     }
 }
 
@@ -65,6 +106,31 @@ nonisolated extension LLMModel {
         .qwen25Coder14BInstruct4Bit
     ]
 
+    static let llamaCppLlama32 = LLMModel(
+        id: "llamacpp-llama-3-2-3b-instruct-gguf",
+        displayName: "Llama 3.2 3B Instruct GGUF",
+        provider: .llamaCpp,
+        repository: "bartowski/Llama-3.2-3B-Instruct-GGUF",
+        contextLength: 131_072,
+        isRecommendedForCoding: false
+    )
+
+    static let llamaCppQwen25Coder = LLMModel(
+        id: "llamacpp-qwen2-5-coder-7b-instruct-gguf",
+        displayName: "Qwen2.5 Coder 7B Instruct GGUF",
+        provider: .llamaCpp,
+        repository: "bartowski/Qwen2.5-Coder-7B-Instruct-GGUF",
+        contextLength: 32_768,
+        isRecommendedForCoding: true
+    )
+
+    static let defaultLlamaCppModels: [LLMModel] = [
+        .llamaCppLlama32,
+        .llamaCppQwen25Coder
+    ]
+
+    static let defaultManagedModels: [LLMModel] = defaultMLXModels + defaultLlamaCppModels
+
     static func customHuggingFaceModel(repository: String) -> LLMModel {
         let normalizedRepository = repository.trimmingCharacters(in: .whitespacesAndNewlines)
         let slug = normalizedRepository.split(separator: "/").last.map(String.init) ?? normalizedRepository
@@ -79,13 +145,30 @@ nonisolated extension LLMModel {
             isRecommendedForCoding: normalizedRepository.lowercased().isCodingModelRepository
         )
     }
+
+    static func customLlamaCppModel(name: String, localPath: String? = nil) -> LLMModel {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return LLMModel(
+            id: "llamacpp-\(trimmedName.stableModelIDComponent)",
+            displayName: trimmedName.displayModelName,
+            provider: .llamaCpp,
+            repository: trimmedName,
+            localPath: localPath,
+            isDownloaded: localPath != nil,
+            isRecommendedForCoding: trimmedName.lowercased().isCodingModelRepository
+        )
+    }
 }
 
 nonisolated enum LLMModelCatalog {
     private static let customModelsStorageKey = "mayu.customHuggingFaceModels.v1"
 
     static var allModels: [LLMModel] {
-        mergedModels(defaults: LLMModel.defaultMLXModels, custom: customModels())
+        mergedModels(
+            defaults: LLMModel.defaultManagedModels,
+            custom: customModels() + APIProviderCatalog.allModels
+        )
     }
 
     static func customModels() -> [LLMModel] {
@@ -214,5 +297,9 @@ private nonisolated extension String {
         contains("codestral") ||
         contains("starcoder") ||
         contains("deepseek-coder")
+    }
+
+    var displayModelName: String {
+        split(separator: "/").last.map(String.init) ?? self
     }
 }

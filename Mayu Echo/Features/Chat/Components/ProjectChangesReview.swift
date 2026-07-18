@@ -2,7 +2,7 @@ import SwiftUI
 import Combine
 import Foundation
 
-struct ProjectChangesSnapshot: Equatable, Sendable {
+nonisolated struct ProjectChangesSnapshot: Equatable, Sendable {
     var projectPath: String?
     var files: [ProjectChangedFile] = []
     var errorMessage: String?
@@ -42,7 +42,7 @@ struct ProjectChangesSnapshot: Equatable, Sendable {
     }
 }
 
-struct ProjectChangedFile: Identifiable, Equatable, Sendable {
+nonisolated struct ProjectChangedFile: Identifiable, Equatable, Sendable {
     let id: String
     let path: String
     let status: String
@@ -66,7 +66,7 @@ struct ProjectChangedFile: Identifiable, Equatable, Sendable {
     }
 }
 
-struct ProjectDiffLine: Identifiable, Equatable, Sendable {
+nonisolated struct ProjectDiffLine: Identifiable, Equatable, Sendable {
     enum Kind: Equatable, Sendable {
         case context
         case added
@@ -171,7 +171,7 @@ private struct ProjectGitChangeLoader {
         }.value
     }
 
-    private static func loadSnapshot(projectPath: String) -> ProjectChangesSnapshot {
+    nonisolated private static func loadSnapshot(projectPath: String) -> ProjectChangesSnapshot {
         guard FileManager.default.fileExists(atPath: projectPath) else {
             return ProjectChangesSnapshot(
                 projectPath: projectPath,
@@ -225,7 +225,7 @@ private struct ProjectGitChangeLoader {
         return ProjectChangesSnapshot(projectPath: projectPath, files: files)
     }
 
-    private static func parseStatus(_ output: String) -> [FileSeed] {
+    nonisolated private static func parseStatus(_ output: String) -> [FileSeed] {
         output
             .split(separator: "\n", omittingEmptySubsequences: true)
             .compactMap { rawLine in
@@ -246,7 +246,7 @@ private struct ProjectGitChangeLoader {
             }
     }
 
-    private static func parseNumstat(_ output: String) -> [FileSeed] {
+    nonisolated private static func parseNumstat(_ output: String) -> [FileSeed] {
         output
             .split(separator: "\n", omittingEmptySubsequences: true)
             .compactMap { rawLine in
@@ -268,7 +268,7 @@ private struct ProjectGitChangeLoader {
             }
     }
 
-    private static func diffLines(for seed: FileSeed, projectPath: String) -> [ProjectDiffLine] {
+    nonisolated private static func diffLines(for seed: FileSeed, projectPath: String) -> [ProjectDiffLine] {
         if seed.status == "??" {
             return untrackedFilePreview(path: seed.path, projectPath: projectPath)
         }
@@ -293,7 +293,7 @@ private struct ProjectGitChangeLoader {
         return parsedLines
     }
 
-    private static func parseDiff(_ diff: String) -> [ProjectDiffLine] {
+    nonisolated private static func parseDiff(_ diff: String) -> [ProjectDiffLine] {
         var rows: [ProjectDiffLine] = []
         var oldLine: Int?
         var newLine: Int?
@@ -346,7 +346,7 @@ private struct ProjectGitChangeLoader {
         return rows
     }
 
-    private static func parseHunkStarts(_ line: String) -> (old: Int, new: Int) {
+    nonisolated private static func parseHunkStarts(_ line: String) -> (old: Int, new: Int) {
         let pattern = #"@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)?"#
         guard let regex = try? NSRegularExpression(pattern: pattern),
               let match = regex.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)),
@@ -358,7 +358,7 @@ private struct ProjectGitChangeLoader {
         return (Int(line[oldRange]) ?? 1, Int(line[newRange]) ?? 1)
     }
 
-    private static func untrackedFilePreview(path: String, projectPath: String) -> [ProjectDiffLine] {
+    nonisolated private static func untrackedFilePreview(path: String, projectPath: String) -> [ProjectDiffLine] {
         let projectURL = URL(fileURLWithPath: projectPath, isDirectory: true).standardizedFileURL
         let fileURL = projectURL.appendingPathComponent(path).standardizedFileURL
 
@@ -387,7 +387,7 @@ private struct ProjectGitChangeLoader {
         }
     }
 
-    private static func runGit(_ arguments: [String], in projectPath: String) -> String? {
+    nonisolated private static func runGit(_ arguments: [String], in projectPath: String) -> String? {
         let process = Process()
         let outputPipe = Pipe()
         let errorPipe = Pipe()
@@ -418,43 +418,62 @@ struct ProjectChangesSummaryBar: View {
     let reviewAction: () -> Void
 
     var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "laptopcomputer.and.arrow.down")
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(.secondary)
+        HStack(spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.triangle.branch")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color.mayuAccent)
 
-            Text(snapshot.fileCountDescription)
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(.secondary)
+                HStack(spacing: 6) {
+                    Text(snapshot.fileCountDescription)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.primary)
 
-            Text("+\(snapshot.additions)")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(.green)
+                    HStack(spacing: 4) {
+                        Text("+\(snapshot.additions)")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(Color.mayuDiffAdded)
 
-            Text("-\(snapshot.deletions)")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(.red)
+                        Text("-\(snapshot.deletions)")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(Color.mayuDiffRemoved)
+                    }
+                }
+            }
 
-            Spacer(minLength: 12)
+            Spacer(minLength: 8)
 
             Button(action: reviewAction) {
-                Text("Review changes")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .contentShape(Rectangle())
+                HStack(spacing: 6) {
+                    Image(systemName: "doc.text.magnifyingglass")
+                        .font(.system(size: 11, weight: .semibold))
+                    Text("Review")
+                        .font(.system(size: 12, weight: .semibold))
+                }
+                .foregroundStyle(.primary)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .background {
+                    Capsule()
+                        .fill(Color.mayuSelection)
+                        .overlay {
+                            Capsule()
+                                .stroke(Color.mayuStrongBorder.opacity(0.5), lineWidth: 1)
+                        }
+                }
             }
             .buttonStyle(.plain)
         }
         .padding(.horizontal, 16)
-        .frame(height: 44)
-        .background(Color.mayuComposerBackground)
-        .overlay {
+        .frame(height: 46)
+        .background {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(Color.mayuBorder, lineWidth: 1)
+                .fill(Color.mayuComposerBackground)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(Color.mayuBorder.opacity(0.55), lineWidth: 1)
+                }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 }
 
@@ -489,28 +508,42 @@ struct ProjectChangesReviewPanel: View {
     }
 
     private var topBar: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 10) {
             Button(action: {}) {
                 Image(systemName: "plus")
-                    .font(.system(size: 16, weight: .regular))
+                    .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(.secondary)
-                    .frame(width: 34, height: 34)
+                    .frame(width: 30, height: 30)
+                    .background {
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .fill(Color.mayuElevatedBackground)
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                    .stroke(Color.mayuBorder.opacity(0.5), lineWidth: 1)
+                            }
+                    }
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
 
             Button(action: refresh) {
-                HStack(spacing: 8) {
+                HStack(spacing: 7) {
                     Image(systemName: "doc.text.magnifyingglass")
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.system(size: 12, weight: .semibold))
                     Text("Review")
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.system(size: 13, weight: .semibold))
                 }
                 .foregroundStyle(.primary)
-                .padding(.horizontal, 12)
-                .frame(height: 34)
-                .background(Color.mayuSelection)
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .padding(.horizontal, 11)
+                .frame(height: 30)
+                .background {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Color.mayuSelection)
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .stroke(Color.mayuBorder.opacity(0.5), lineWidth: 1)
+                        }
+                }
             }
             .buttonStyle(.plain)
 
@@ -518,18 +551,18 @@ struct ProjectChangesReviewPanel: View {
 
             Button(action: refresh) {
                 Image(systemName: isLoading ? "arrow.triangle.2.circlepath" : "arrow.clockwise")
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.secondary)
-                    .frame(width: 30, height: 30)
+                    .frame(width: 28, height: 28)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
 
             Button(action: {}) {
                 Image(systemName: "arrow.up.left.and.arrow.down.right")
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.secondary)
-                    .frame(width: 30, height: 30)
+                    .frame(width: 28, height: 28)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -538,15 +571,15 @@ struct ProjectChangesReviewPanel: View {
                 isVisible = false
             } label: {
                 Image(systemName: "sidebar.right")
-                    .font(.system(size: 16, weight: .medium))
+                    .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(.primary)
-                    .frame(width: 30, height: 30)
+                    .frame(width: 28, height: 28)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
         }
-        .padding(.horizontal, 20)
-        .frame(height: 58)
+        .padding(.horizontal, 18)
+        .frame(height: 54)
     }
 
     private var reviewContent: some View {
@@ -566,11 +599,11 @@ struct ProjectChangesReviewPanel: View {
 
                 Text("+\(snapshot.additions)")
                     .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.green)
+                    .foregroundStyle(Color.mayuDiffAdded)
 
                 Text("-\(snapshot.deletions)")
                     .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.red)
+                    .foregroundStyle(Color.mayuDiffRemoved)
 
                 Spacer()
 
@@ -688,11 +721,11 @@ private struct ProjectChangedFileSection: View {
 
                     Text("+\(file.additions)")
                         .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.green)
+                        .foregroundStyle(Color.mayuDiffAdded)
 
                     Text("-\(file.deletions)")
                         .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.red)
+                        .foregroundStyle(Color.mayuDiffRemoved)
 
                     Spacer()
 
@@ -779,9 +812,9 @@ private struct ProjectDiffLineRow: View {
     private var prefixColor: Color {
         switch line.kind {
         case .added:
-            return .green
+            return Color.mayuDiffAdded
         case .removed:
-            return .red
+            return Color.mayuDiffRemoved
         default:
             return .secondary
         }
@@ -799,9 +832,9 @@ private struct ProjectDiffLineRow: View {
     private var backgroundColor: Color {
         switch line.kind {
         case .added:
-            return .green.opacity(0.14)
+            return Color.mayuDiffAdded.opacity(0.14)
         case .removed:
-            return .red.opacity(0.14)
+            return Color.mayuDiffRemoved.opacity(0.14)
         case .hunk:
             return Color.mayuSelection.opacity(0.7)
         default:

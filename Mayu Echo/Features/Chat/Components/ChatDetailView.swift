@@ -7,6 +7,7 @@ struct ChatDetailView: View {
     private static let bottomAnchorID = "chat-detail-bottom-anchor"
 
     @Environment(\.modelContext) private var modelContext
+    @EnvironmentObject private var appSettings: AppSettings
     let item: Item?
     var ensureChat: (() -> Item?)?
     @StateObject private var viewModel = ChatSessionViewModel()
@@ -51,6 +52,7 @@ struct ChatDetailView: View {
         }
         .onAppear {
             viewModel.configure(item: item, modelContext: modelContext)
+            viewModel.apply(settings: appSettings)
             projectChanges.configure(projectPath: activeProjectPath)
         }
         .onChange(of: item?.title) {
@@ -58,17 +60,31 @@ struct ChatDetailView: View {
         }
         .onChange(of: item?.persistentModelID) {
             viewModel.configure(item: item, modelContext: modelContext)
+            viewModel.apply(settings: appSettings)
             projectChanges.configure(projectPath: activeProjectPath)
             lastProjectChangeCount = projectChanges.snapshot.changeCount
         }
-        .onChange(of: projectChanges.snapshot.changeCount) {
-            let changeCount = projectChanges.snapshot.changeCount
-
-            if lastProjectChangeCount == 0 && changeCount > 0 {
-                isRightPanelVisible = true
+        .onChange(of: appSettingsSignature) {
+            viewModel.apply(settings: appSettings)
+        }
+        .onChange(of: appSettings.generationOptions) {
+            viewModel.generationOptions = appSettings.generationOptions
+        }
+        .onChange(of: viewModel.selectedModel) {
+            // Only write back genuine (composer-driven) selection changes. When the change
+            // originated from `apply(settings:)`, appSettings already holds this id, so
+            // skipping avoids a settings -> viewModel -> settings loop that fought engine switches.
+            guard appSettings.selectedModelID != viewModel.selectedModel.id else {
+                return
             }
 
-            lastProjectChangeCount = changeCount
+            appSettings.selectModel(viewModel.selectedModel)
+        }
+        .onChange(of: viewModel.generationOptions) {
+            appSettings.generationOptions = viewModel.generationOptions
+        }
+        .onChange(of: projectChanges.snapshot.changeCount) {
+            handleProjectChangeCount()
         }
         .animation(.easeInOut(duration: 0.18), value: isRightPanelVisible)
     }
@@ -85,25 +101,49 @@ struct ChatDetailView: View {
         isAtLatestMessage = true
     }
 
+    private func handleProjectChangeCount() {
+        let changeCount = projectChanges.snapshot.changeCount
+
+        if lastProjectChangeCount == 0 && changeCount > 0 {
+            isRightPanelVisible = true
+        }
+
+        lastProjectChangeCount = changeCount
+    }
+
     private var chatTitleControl: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(Color.mayuAccentSoft)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .stroke(Color.mayuStrongBorder.opacity(0.5), lineWidth: 1)
+                    }
+
+                Image(systemName: activeProjectPath == nil ? "bubble.left.and.bubble.right" : "folder")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.mayuAccent)
+            }
+            .frame(width: 24, height: 24)
+
             Text(chatTitle)
-                .font(.system(size: 14, weight: .semibold))
+                .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.primary)
                 .lineLimit(1)
                 .truncationMode(.tail)
-                .frame(maxWidth:120)
-            
-            Button(action: {}) {
-                Image(systemName: "ellipsis")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 28, height: 28)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
+                .frame(maxWidth: 200, alignment: .leading)
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background {
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(Color.mayuPanelBackground.opacity(0.7))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .stroke(Color.mayuBorder.opacity(0.6), lineWidth: 1)
+                }
+        }
     }
 
     private var splitViewControl: some View {
@@ -166,6 +206,14 @@ struct ChatDetailView: View {
                 ZStack(alignment: .bottom) {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 16) {
+                            if viewModel.messages.isEmpty {
+                                EmptyChatState(
+                                    model: viewModel.selectedModel,
+                                    projectName: activeProjectPath.map { URL(fileURLWithPath: $0).lastPathComponent }
+                                )
+                                    .frame(maxWidth: .infinity, minHeight: 420, alignment: .center)
+                            }
+
                             ForEach(viewModel.messages) { message in
                                 ChatMessageBubble(
                                     message: message,
@@ -229,21 +277,28 @@ struct ChatDetailView: View {
         Button {
             scrollToLatest(using: scrollProxy, animated: true)
         } label: {
-            Image(systemName: "arrow.down")
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(.primary)
-                .frame(width: 38, height: 38)
-                .background(Color.mayuSelection)
-                .overlay {
-                    Circle()
-                        .stroke(Color.mayuBorder, lineWidth: 1)
-                }
-                .clipShape(Circle())
-                .shadow(color: .black.opacity(0.22), radius: 14, y: 6)
-                .contentShape(Circle())
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.down")
+                    .font(.system(size: 12, weight: .bold))
+
+                Text("Jump to latest")
+                    .font(.system(size: 12, weight: .semibold))
+            }
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 9)
+            .background {
+                Capsule()
+                    .fill(Color.mayuPanelBackground)
+                    .overlay {
+                        Capsule()
+                            .stroke(Color.mayuStrongBorder.opacity(0.6), lineWidth: 1)
+                    }
+            }
+            .shadow(color: .black.opacity(0.12), radius: 12, y: 6)
         }
         .buttonStyle(.plain)
-        .padding(.bottom, 18)
+        .padding(.bottom, 20)
     }
 
     private func updateLatestVisibility(bottomY: CGFloat, viewportHeight: CGFloat) {
@@ -299,6 +354,16 @@ struct ChatDetailView: View {
             usedTokens: usedTokens,
             maxTokens: viewModel.selectedModel.workingContextLength
         )
+    }
+
+    private var appSettingsSignature: String {
+        [
+            appSettings.preferredProvider.rawValue,
+            appSettings.selectedModelID ?? "",
+            "\(appSettings.includeProjectContext)",
+            "\(appSettings.contextTokenBudget)",
+            "\(appSettings.allowTerminalCommands)"
+        ].joined(separator: "|")
     }
 
     private func estimatedTokenCount(in text: String) -> Int {
@@ -419,34 +484,55 @@ private struct ChatMessageBubble: View {
 
     private var userMessage: some View {
         Text(displayContent)
-            .font(.system(size: 15))
+            .font(.system(size: 15, weight: .regular))
             .foregroundStyle(.primary)
             .textSelection(.enabled)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 11)
-            .frame(maxWidth: 620, alignment: .leading)
-            .background(Color.mayuUserBubble)
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .lineSpacing(4)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 13)
+            .frame(maxWidth: 640, alignment: .leading)
+            .background {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(Color.mayuUserBubble)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .stroke(Color.mayuStrongBorder.opacity(0.4), lineWidth: 1)
+                    }
+            }
+            .shadow(color: .black.opacity(0.05), radius: 6, y: 2)
     }
 
     private var assistantMessage: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            ForEach(ChatMessageSegment.parse(displayContent)) { segment in
-                switch segment {
-                case .prose(_, let text):
-                    Text(text)
-                        .font(.system(size: 15))
-                        .lineSpacing(3)
-                        .foregroundStyle(.primary)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                case .code(_, let language, let body):
-                    CodeBlockCard(language: language, code: body)
+        HStack(alignment: .top, spacing: 12) {
+            // Avatar chip
+            ZStack {
+                Circle()
+                    .fill(Color.mayuAccentSoft)
+                    .overlay {
+                        Circle()
+                            .stroke(Color.mayuBorder.opacity(0.5), lineWidth: 1)
+                    }
+
+                Image(systemName: "sparkles")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.mayuAccent)
+            }
+            .frame(width: 28, height: 28)
+            .padding(.top, 1)
+
+            VStack(alignment: .leading, spacing: 14) {
+                ForEach(ChatMessageSegment.parse(displayContent)) { segment in
+                    switch segment {
+                    case .prose(_, let text):
+                        AssistantProseView(text: text)
+                    case .code(_, let language, let body):
+                        CodeBlockCard(language: language, code: body)
+                    }
                 }
             }
+            .frame(maxWidth: 720, alignment: .leading)
         }
-        .frame(maxWidth: 760, alignment: .leading)
-        .padding(.trailing, 88)
+        .padding(.trailing, 60)
     }
 
     private var displayContent: String {
@@ -468,6 +554,153 @@ private struct ChatMessageBubble: View {
     }
 }
 
+private struct EmptyChatState: View {
+    let model: LLMModel
+    var projectName: String?
+
+    private let suggestions: [(icon: String, title: String, subtitle: String, tint: Color)] = [
+        (
+            "terminal", "Run a command", "Execute shell commands in your project",
+            Color(red: 0.757, green: 0.376, blue: 0.239)
+        ),
+        (
+            "doc.text.magnifyingglass", "Review changes", "Inspect recent git diffs",
+            Color(red: 0.267, green: 0.498, blue: 0.220)
+        ),
+        (
+            "lightbulb", "Ask anything", "Explain code, suggest refactors",
+            Color(red: 0.749, green: 0.573, blue: 0.157)
+        ),
+        (
+            "arrow.triangle.2.circlepath", "Iterate", "Edit and regenerate responses",
+            Color(red: 0.522, green: 0.400, blue: 0.573)
+        )
+    ]
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Spacer()
+
+            VStack(spacing: 18) {
+                // Logo
+                ZStack {
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .fill(Color.mayuAccentSoft)
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                                .stroke(Color.mayuStrongBorder.opacity(0.5), lineWidth: 1)
+                        }
+
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 30, weight: .semibold))
+                        .foregroundStyle(Color.mayuAccent)
+                }
+                .frame(width: 72, height: 72)
+                .shadow(color: Color.mayuAccent.opacity(0.15), radius: 20)
+
+                VStack(spacing: 6) {
+                    if let projectName {
+                        Text("What should we build in \(projectName)?")
+                            .font(.system(size: 26, weight: .semibold, design: .serif))
+                            .foregroundStyle(.primary)
+                            .tracking(-0.2)
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: 480)
+                    } else {
+                        Text("Mayu Echo")
+                            .font(.system(size: 30, weight: .semibold, design: .serif))
+                            .foregroundStyle(.primary)
+                            .tracking(-0.2)
+                    }
+
+                    HStack(spacing: 6) {
+                        Image(systemName: providerIcon)
+                            .font(.system(size: 11, weight: .semibold))
+                        Text(model.provider.rawValue)
+                        Text("·")
+                        Text(model.displayName)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: 320)
+                }
+            }
+
+            // Suggestion chips
+            LazyVGrid(
+                columns: [GridItem(.flexible()), GridItem(.flexible())],
+                spacing: 10
+            ) {
+                ForEach(suggestions, id: \.title) { suggestion in
+                    SuggestionChip(icon: suggestion.icon, title: suggestion.title, subtitle: suggestion.subtitle, tint: suggestion.tint)
+                }
+            }
+            .frame(maxWidth: 560)
+            .padding(.top, 40)
+
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var providerIcon: String {
+        switch model.provider {
+        case .mlx: return "apple.logo"
+        case .llamaCpp: return "memorychip"
+        case .api: return "network"
+        }
+    }
+}
+
+private struct SuggestionChip: View {
+    let icon: String
+    let title: String
+    let subtitle: String
+    let tint: Color
+    @State private var isHovered = false
+
+    var body: some View {
+        HStack(spacing: 11) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(tint.opacity(0.14))
+
+                Image(systemName: icon)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(tint)
+            }
+            .frame(width: 32, height: 32)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.primary)
+                Text(subtitle)
+                    .font(.system(size: 11, weight: .regular))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .background {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(isHovered ? Color.mayuElevatedBackground : Color.mayuPanelBackground)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(isHovered ? Color.mayuStrongBorder.opacity(0.7) : Color.mayuBorder.opacity(0.55), lineWidth: 1)
+                }
+        }
+        .shadow(color: .black.opacity(isHovered ? 0.07 : 0), radius: 8, y: 3)
+        .scaleEffect(isHovered ? 1.01 : 1)
+        .animation(.spring(response: 0.2, dampingFraction: 0.7), value: isHovered)
+        .onHover { isHovered = $0 }
+    }
+}
+
 private struct InlinePromptEditor: View {
     @Binding var text: String
     @FocusState private var isFocused: Bool
@@ -486,6 +719,210 @@ private struct InlinePromptEditor: View {
             .onAppear {
                 isFocused = true
             }
+    }
+}
+
+private struct AssistantProseView: View {
+    let text: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(AssistantProseElement.parse(text)) { element in
+                switch element.kind {
+                case .heading:
+                    AssistantHeading(text: element.text)
+                case .bullet:
+                    AssistantBullet(text: element.text)
+                case .numbered(let number):
+                    AssistantNumberedStep(number: number, text: element.text)
+                case .paragraph:
+                    Text(element.text)
+                        .font(.system(size: 15, weight: .regular))
+                        .lineSpacing(5)
+                        .foregroundStyle(.primary.opacity(0.9))
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct AssistantHeading: View {
+    let text: String
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            RoundedRectangle(cornerRadius: 2, style: .continuous)
+                .fill(Color.mayuAccent)
+                .frame(width: 3, height: 20)
+
+            Text(text)
+                .font(.system(size: 16, weight: .bold))
+                .foregroundStyle(.primary)
+                .textSelection(.enabled)
+                .tracking(-0.2)
+        }
+        .padding(.top, 10)
+        .padding(.bottom, 2)
+    }
+}
+
+private struct AssistantBullet: View {
+    let text: String
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            RoundedRectangle(cornerRadius: 1, style: .continuous)
+                .fill(Color.mayuAccent.opacity(0.75))
+                .frame(width: 4, height: 4)
+                .padding(.top, 8)
+
+            Text(text)
+                .font(.system(size: 15, weight: .regular))
+                .lineSpacing(4)
+                .foregroundStyle(.primary.opacity(0.88))
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.leading, 12)
+    }
+}
+
+private struct AssistantNumberedStep: View {
+    let number: Int
+    let text: String
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text("\(number)")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(Color.mayuOnAccent)
+                .frame(width: 20, height: 20)
+                .background {
+                    Circle().fill(Color.mayuAccentSolid)
+                }
+
+            Text(text)
+                .font(.system(size: 15, weight: .regular))
+                .lineSpacing(4)
+                .foregroundStyle(.primary.opacity(0.88))
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.leading, 8)
+    }
+}
+
+private struct AssistantProseElement: Identifiable {
+    enum Kind {
+        case heading
+        case bullet
+        case numbered(Int)
+        case paragraph
+    }
+
+    let id = UUID()
+    let kind: Kind
+    let text: String
+
+    static func parse(_ text: String) -> [AssistantProseElement] {
+        var elements: [AssistantProseElement] = []
+        var paragraphLines: [String] = []
+
+        func flushParagraph() {
+            let paragraph = paragraphLines
+                .joined(separator: " ")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+
+            paragraphLines.removeAll()
+
+            guard !paragraph.isEmpty else {
+                return
+            }
+
+            elements.append(AssistantProseElement(kind: .paragraph, text: cleanInlineMarkdown(paragraph)))
+        }
+
+        for rawLine in text.components(separatedBy: .newlines) {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            guard !line.isEmpty else {
+                flushParagraph()
+                continue
+            }
+
+            if let heading = headingText(from: line) {
+                flushParagraph()
+                elements.append(AssistantProseElement(kind: .heading, text: cleanInlineMarkdown(heading)))
+            } else if let bullet = bulletText(from: line) {
+                flushParagraph()
+                elements.append(AssistantProseElement(kind: .bullet, text: cleanInlineMarkdown(bullet)))
+            } else if let numbered = numberedText(from: line) {
+                flushParagraph()
+                elements.append(AssistantProseElement(kind: .numbered(numbered.number), text: cleanInlineMarkdown(numbered.text)))
+            } else {
+                paragraphLines.append(line)
+            }
+        }
+
+        flushParagraph()
+
+        if elements.isEmpty {
+            return [AssistantProseElement(kind: .paragraph, text: cleanInlineMarkdown(text))]
+        }
+
+        return elements
+    }
+
+    private static func headingText(from line: String) -> String? {
+        let hashCount = line.prefix { $0 == "#" }.count
+        guard hashCount > 0, hashCount <= 6 else {
+            return nil
+        }
+
+        let startIndex = line.index(line.startIndex, offsetBy: hashCount)
+        guard startIndex < line.endIndex, line[startIndex].isWhitespace else {
+            return nil
+        }
+
+        return String(line[startIndex...]).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func bulletText(from line: String) -> String? {
+        for marker in ["- ", "* ", "• "] where line.hasPrefix(marker) {
+            return String(line.dropFirst(marker.count))
+        }
+
+        return nil
+    }
+
+    private static func numberedText(from line: String) -> (number: Int, text: String)? {
+        guard let dotIndex = line.firstIndex(of: ".") else {
+            return nil
+        }
+
+        let numberText = String(line[..<dotIndex])
+        guard let number = Int(numberText) else {
+            return nil
+        }
+
+        let contentStart = line.index(after: dotIndex)
+        guard contentStart < line.endIndex, line[contentStart].isWhitespace else {
+            return nil
+        }
+
+        let content = String(line[contentStart...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        return content.isEmpty ? nil : (number, content)
+    }
+
+    private static func cleanInlineMarkdown(_ text: String) -> String {
+        text
+            .replacingOccurrences(of: "**", with: "")
+            .replacingOccurrences(of: "__", with: "")
+            .replacingOccurrences(of: "`", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 
@@ -563,46 +1000,85 @@ private struct CodeBlockCard: View {
     let language: String
     let code: String
     @State private var copied = false
+    @State private var isHeaderHovered = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            // Header bar
             HStack(spacing: 10) {
-                Text(language.lowercased())
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.secondary)
+                HStack(spacing: 6) {
+                    // Traffic-light dots
+                    HStack(spacing: 5) {
+                        Circle().fill(Color(red: 1.00, green: 0.373, blue: 0.341).opacity(0.8)).frame(width: 8, height: 8)
+                        Circle().fill(Color(red: 0.996, green: 0.737, blue: 0.180).opacity(0.8)).frame(width: 8, height: 8)
+                        Circle().fill(Color(red: 0.157, green: 0.784, blue: 0.251).opacity(0.8)).frame(width: 8, height: 8)
+                    }
+
+                    Rectangle()
+                        .fill(Color.mayuBorder.opacity(0.6))
+                        .frame(width: 1, height: 14)
+                        .padding(.horizontal, 2)
+
+                    Text(language.isEmpty ? "code" : language.lowercased())
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
 
                 Spacer()
 
                 Button(action: copyCode) {
-                    Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 28, height: 24)
+                    HStack(spacing: 5) {
+                        Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                            .font(.system(size: 11, weight: .medium))
+                        Text(copied ? "Copied" : "Copy")
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                    .foregroundStyle(copied ? Color.mayuAccent : .secondary)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 5)
+                    .background {
+                        Capsule()
+                            .fill(Color.mayuElevatedBackground)
+                            .overlay {
+                                Capsule()
+                                    .stroke(Color.mayuBorder.opacity(0.6), lineWidth: 1)
+                            }
+                    }
                 }
                 .buttonStyle(.plain)
+                .animation(.easeInOut(duration: 0.15), value: copied)
             }
             .padding(.horizontal, 14)
-            .padding(.top, 12)
-            .padding(.bottom, 8)
+            .padding(.vertical, 10)
+            .background {
+                Rectangle()
+                    .fill(Color.mayuElevatedBackground.opacity(0.6))
+            }
 
+            Rectangle()
+                .fill(Color.mayuBorder.opacity(0.5))
+                .frame(height: 1)
+
+            // Code body
             ScrollView(.horizontal, showsIndicators: false) {
                 Text(code.isEmpty ? " " : code)
-                    .font(.system(size: 14, design: .monospaced))
-                    .lineSpacing(5)
-                    .foregroundStyle(.primary)
+                    .font(.system(size: 13, design: .monospaced))
+                    .lineSpacing(6)
+                    .foregroundStyle(.primary.opacity(0.92))
                     .textSelection(.enabled)
-                    .padding(.horizontal, 14)
-                    .padding(.bottom, 14)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 14)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .frame(maxWidth: 720, alignment: .leading)
+        .frame(maxWidth: 740, alignment: .leading)
         .background(Color.mayuCodeBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color.mayuBorder, lineWidth: 1)
+                .stroke(Color.mayuBorder.opacity(0.6), lineWidth: 1)
         }
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .shadow(color: .black.opacity(0.06), radius: 8, y: 3)
     }
 
     private func copyCode() {
@@ -610,7 +1086,7 @@ private struct CodeBlockCard: View {
         NSPasteboard.general.setString(code, forType: .string)
         copied = true
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
             copied = false
         }
     }

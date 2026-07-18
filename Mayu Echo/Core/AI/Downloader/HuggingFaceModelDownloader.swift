@@ -84,7 +84,7 @@ nonisolated final class HuggingFaceModelDownloader {
                 expectedSize: file.size
             ) { downloadedBytes in
                 Task { @MainActor in
-                    await progress(
+                    progress(
                         self.progressValue(
                             completedBytes: completedSizeBeforeFile + min(downloadedBytes, file.progressSize),
                             totalBytes: totalDownloadSize

@@ -13,7 +13,9 @@ actor MLXEngine: LLMEngine {
     private let tokenizerLoader = HuggingFaceTokenizerLoader()
 
     func availableModels() async throws -> [LLMModel] {
-        LLMModelCatalog.allModels.map { downloader.modelWithLocalStatus($0) }
+        LLMModelCatalog.allModels
+            .filter { $0.provider == .mlx }
+            .map { downloader.modelWithLocalStatus($0) }
     }
 
     func load(model: LLMModel) async throws {
@@ -57,7 +59,7 @@ actor MLXEngine: LLMEngine {
                 options: options,
                 continuation: stream.continuation
             )
-            await clearGenerationTask(id: generationID)
+            clearGenerationTask(id: generationID)
         }
 
         self.generationID = generationID

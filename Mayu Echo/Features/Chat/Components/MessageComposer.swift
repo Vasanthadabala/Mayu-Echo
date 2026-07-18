@@ -27,24 +27,37 @@ struct MessageComposer: View {
                 .frame(height: inputHeight, alignment: .topLeading)
 
                 if message.isEmpty {
-                    Text("Ask for follow-up changes")
-                        .font(.system(size: 17))
-                        .foregroundStyle(.secondary)
+                    Text("Message Mayu Echo...")
+                        .font(.system(size: 17, weight: .regular))
+                        .foregroundStyle(.tertiary)
                         .allowsHitTesting(false)
                 }
             }
             .padding(.horizontal, 18)
-            .padding(.top, 18)
-            .padding(.bottom, 12)
+            .padding(.top, 16)
+            .padding(.bottom, 10)
 
-            HStack(spacing: 16) {
-                Button(action: {}) {
+            HStack(spacing: 10) {
+                Menu {
+                    Button(action: insertTerminalPrompt) {
+                        Label("Terminal command", systemImage: "terminal")
+                    }
+                } label: {
                     Image(systemName: "plus")
-                        .font(.system(size: 18, weight: .regular))
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.secondary)
                         .frame(width: 30, height: 30)
-                        .contentShape(Rectangle())
+                        .background {
+                            Circle()
+                                .fill(Color.mayuElevatedBackground)
+                                .overlay {
+                                    Circle().stroke(Color.mayuBorder.opacity(0.6), lineWidth: 1)
+                                }
+                        }
+                        .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
+                .help("Add action")
 
                 Menu {
                     Button("Default permissions", action: {})
@@ -53,12 +66,23 @@ struct MessageComposer: View {
                         HStack(spacing: 6) {
                             Text("Default permissions")
                             Image(systemName: "chevron.down")
-                                .font(.system(size: 12, weight: .medium))
+                                .font(.system(size: 11, weight: .semibold))
                         }
                     } icon: {
                         Image(systemName: "hand.raised")
                     }
-                    .font(.system(size: 16))
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 11)
+                    .padding(.vertical, 7)
+                    .background {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(Color.mayuElevatedBackground)
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .stroke(Color.mayuBorder.opacity(0.6), lineWidth: 1)
+                            }
+                    }
                 }
                 .menuStyle(.borderlessButton)
                 .buttonStyle(.plain)
@@ -80,45 +104,39 @@ struct MessageComposer: View {
                     Divider()
 
                     Menu("Models") {
-                        ForEach(availableModels, id: \.id) { model in
-                            ModelMenuButton(model: model, selection: $selectedModel)
+                        ForEach(LLMModel.Provider.allCases, id: \.self) { provider in
+                            let providerModels = downloadedModels.filter { $0.provider == provider }
+                            if !providerModels.isEmpty {
+                                Section(provider.rawValue) {
+                                    ForEach(providerModels, id: \.id) { model in
+                                        ModelMenuButton(model: model, selection: $selectedModel)
+                                    }
+                                }
+                            }
                         }
                     }
                 } label: {
-                    HStack(spacing: 7) {
-                        Text(selectedModel.displayName)
-                            .foregroundStyle(.primary)
-                        Text(generationOptions.intelligence.rawValue)
-                            .foregroundStyle(.secondary)
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(.secondary)
-                    }
-                    .font(.system(size: 17))
-                    .fixedSize()
+                    ModelSelectorLabel(
+                        model: selectedModel,
+                        intelligence: generationOptions.intelligence
+                    )
                     .layoutPriority(1)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(Color.mayuSelection)
-                    .clipShape(Capsule())
-                }
-                .buttonStyle(.plain)
-
-                Button(action: {}) {
-                    Image(systemName: "mic")
-                        .font(.system(size: 18))
-                        .frame(width: 30, height: 30)
-                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
 
                 Button(action: primaryAction) {
-                    Image(systemName: isGenerating ? "stop.fill" : "arrow.up")
-                        .font(.system(size: isGenerating ? 14 : 21, weight: .medium))
-                        .foregroundStyle(Color.mayuChatBackground)
-                        .frame(width: 46, height: 46)
-                        .background(primaryButtonBackground)
-                        .clipShape(Circle())
+                    ZStack {
+                        Circle()
+                            .fill(primaryButtonBackground)
+
+                        Image(systemName: isGenerating ? "stop.fill" : "arrow.up")
+                            .font(.system(size: isGenerating ? 11 : 15, weight: .bold))
+                            .foregroundStyle(primaryButtonForeground)
+                    }
+                    .frame(width: 36, height: 36)
+                    .scaleEffect(canSend || isGenerating ? 1 : 0.92)
+                    .animation(.spring(response: 0.25, dampingFraction: 0.7), value: canSend)
+                    .animation(.spring(response: 0.25, dampingFraction: 0.7), value: isGenerating)
                 }
                 .buttonStyle(.plain)
                 .disabled(!isGenerating && !canSend)
@@ -128,13 +146,15 @@ struct MessageComposer: View {
             .padding(.trailing, 12)
             .padding(.bottom, 12)
         }
-        .background(Color.mayuComposerBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 28, style: .continuous)
-                .stroke(Color.mayuBorder, lineWidth: 1)
+        .background {
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(Color.mayuComposerBackground)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .stroke(Color.mayuStrongBorder.opacity(0.5), lineWidth: 1)
+                }
         }
-        .shadow(color: .black.opacity(0.12), radius: 22, y: 8)
+        .shadow(color: .black.opacity(0.08), radius: 16, y: 6)
     }
 
     private func sendIfPossible() {
@@ -153,12 +173,28 @@ struct MessageComposer: View {
         }
     }
 
+    private func insertTerminalPrompt() {
+        if message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            message = "/terminal "
+        } else {
+            message += "\n/terminal "
+        }
+    }
+
     private var primaryButtonBackground: Color {
         if isGenerating {
-            return Color.secondary.opacity(0.95)
+            return Color.mayuWarning
         }
 
-        return canSend ? Color.secondary.opacity(0.95) : Color.secondary.opacity(0.28)
+        return canSend ? Color.mayuAccentSolid : Color.secondary.opacity(0.22)
+    }
+
+    private var primaryButtonForeground: Color {
+        (isGenerating || canSend) ? Color.mayuOnAccent : .secondary
+    }
+
+    private var downloadedModels: [LLMModel] {
+        availableModels.filter(\.isDownloaded)
     }
 
     private var intelligenceSelection: Binding<LLMGenerationOptions.Intelligence> {
@@ -166,6 +202,71 @@ struct MessageComposer: View {
             generationOptions.intelligence
         } set: { intelligence in
             generationOptions.applyIntelligencePreset(intelligence)
+        }
+    }
+}
+
+private struct ModelSelectorLabel: View {
+    let model: LLMModel
+    let intelligence: LLMGenerationOptions.Intelligence
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ZStack {
+                Circle()
+                    .fill(Color.mayuAccentSoft)
+                    .overlay {
+                        Circle()
+                            .stroke(Color.mayuBorder.opacity(0.4), lineWidth: 1)
+                    }
+
+                Image(systemName: providerIcon)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.mayuAccent)
+            }
+            .frame(width: 22, height: 22)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(model.compactDisplayName)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+
+                HStack(spacing: 4) {
+                    Text(model.provider.rawValue)
+                    Text("/")
+                        .foregroundStyle(.quaternary)
+                    Text(intelligence.rawValue)
+                }
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            }
+            .frame(maxWidth: 160, alignment: .leading)
+
+            Image(systemName: "chevron.up.chevron.down")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.leading, 7)
+        .padding(.trailing, 8)
+        .padding(.vertical, 6)
+        .background {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.mayuSelection)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(Color.mayuBorder.opacity(0.45), lineWidth: 1)
+                }
+        }
+    }
+
+    private var providerIcon: String {
+        switch model.provider {
+        case .mlx: return "apple.logo"
+        case .llamaCpp: return "memorychip"
+        case .api: return "network"
         }
     }
 }
@@ -238,13 +339,13 @@ private struct ContextProgressRing: View {
     var body: some View {
         ZStack {
             Circle()
-                .stroke(Color.secondary.opacity(0.28), lineWidth: 4)
+                .stroke(Color.secondary.opacity(0.25), lineWidth: 3)
 
             Circle()
                 .trim(from: 0, to: progress)
                 .stroke(
-                    Color.secondary,
-                    style: StrokeStyle(lineWidth: 4, lineCap: .round)
+                    Color.mayuAccent,
+                    style: StrokeStyle(lineWidth: 3, lineCap: .round)
                 )
                 .rotationEffect(.degrees(-90))
         }
@@ -256,28 +357,39 @@ private struct ContextWindowPopover: View {
     let usage: ContextWindowUsage
 
     var body: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 8) {
             Text("Context window:")
-                .font(.system(size: 19, weight: .medium))
+                .font(.system(size: 14, weight: .medium))
                 .foregroundStyle(.secondary)
 
-            VStack(spacing: 8) {
+            VStack(spacing: 5) {
                 Text("\(usage.usedPercentage)% used (\(usage.leftPercentage)% left)")
                 Text(usage.usedDescription)
             }
-            .font(.system(size: 19, weight: .regular))
+            .font(.system(size: 14, weight: .regular))
             .foregroundStyle(.primary)
 
             Text("Mayu Echo automatically\ncompacts its context")
-                .font(.system(size: 18, weight: .semibold))
+                .font(.system(size: 14, weight: .semibold))
                 .multilineTextAlignment(.center)
-                .lineSpacing(4)
+                .lineSpacing(2)
                 .foregroundStyle(.primary)
-                .padding(.top, 10)
+                .padding(.top, 6)
         }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 18)
-        .frame(width: 260)
+        .padding(.horizontal, 18)
+        .padding(.vertical, 14)
+        .frame(width: 210)
+    }
+}
+
+private extension LLMModel {
+    var compactDisplayName: String {
+        displayName
+            .replacingOccurrences(of: " Instruct 4-bit", with: "")
+            .replacingOccurrences(of: " Instruct GGUF", with: "")
+            .replacingOccurrences(of: " Instruct", with: "")
+            .replacingOccurrences(of: " 4-bit", with: "")
+            .replacingOccurrences(of: " GGUF", with: "")
     }
 }
 

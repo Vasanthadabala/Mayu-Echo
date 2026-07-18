@@ -11,50 +11,108 @@ import UniformTypeIdentifiers
 
 struct ChatView: View {
     @Environment(\.modelContext) private var modelContext
+    @EnvironmentObject private var appSettings: AppSettings
     @Query(sort: \Item.timestamp, order: .reverse) private var items: [Item]
     @State private var selectedItemID: PersistentIdentifier?
     @State private var isPickingProject = false
-    @State private var isProjectsExpanded = true
     @State private var isChatsExpanded = true
     @State private var isShowingSettingsMenu = false
     @State private var selectedDestination: DetailDestination = .chat
     @State private var renamingItemID: PersistentIdentifier?
     @State private var renameDraft = ""
+    @State private var isSearchPresented = false
+    @State private var sidebarMode: SidebarMode = .home
+    @State private var expandedCodePaths: Set<String> = []
+    @State private var selectedCodeFilePath: String?
 
     private var projects: [Item] {
         items.filter(\.isProject)
     }
 
     private var chats: [Item] {
-        items.filter { !$0.isProject && $0.parentProjectPath == nil }
+        items.filter { !$0.isProject }
+    }
+
+    private var settingsAvailableModels: [LLMModel] {
+        let downloader = HuggingFaceModelDownloader()
+        return LLMModelCatalog.allModels.map { model in
+            model.provider == .mlx ? downloader.modelWithLocalStatus(model) : model
+        }
     }
 
     var body: some View {
-        NavigationSplitView {
-            sidebar
-                .navigationSplitViewColumnWidth(min: 280, ideal: 300)
-        } detail: {
-            switch selectedDestination {
-            case .chat:
-                ChatDetailView(item: selectedItem, ensureChat: ensureChatForDetail)
-            case .aiModels:
-                AIModelsView()
+        ZStack {
+            // The NavigationSplitView is ALWAYS alive so ChatDetailView (and its
+            // @StateObject ChatSessionViewModel) is never deallocated while the
+            // LLM is generating. Settings is layered on top via ZStack.
+            NavigationSplitView {
+                sidebar
+                    .navigationSplitViewColumnWidth(min: 280, ideal: 300)
+            } detail: {
+                switch selectedDestination {
+                case .chat, .settings:
+                    ChatDetailView(item: selectedItem, ensureChat: ensureChatForDetail)
+                case .aiModels:
+                    AIModelsView(backAction: { selectedDestination = .chat })
+                case .codeFile:
+                    if let selectedCodeFilePath {
+                        CodeFileViewerView(filePath: selectedCodeFilePath)
+                    } else {
+                        ChatDetailView(item: selectedItem, ensureChat: ensureChatForDetail)
+                    }
+                }
+            }
+            .toolbar(selectedDestination == .settings ? .hidden : .automatic, for: .windowToolbar)
+
+            // Settings screen overlaid — generation keeps running underneath.
+            if selectedDestination == .settings {
+                AppSettingsView(
+                    availableModels: settingsAvailableModels,
+                    backAction: {
+                        selectedDestination = .chat
+                    }
+                )
+                .transition(.opacity)
+                .zIndex(1)
+            }
+
+            if isSearchPresented {
+                SearchPaletteOverlay(
+                    items: items,
+                    isPresented: $isSearchPresented,
+                    relativeTime: relativeTime,
+                    selectItem: handleSearchSelection
+                )
+                .transition(.opacity)
+                .zIndex(2)
             }
         }
+        .animation(.easeInOut(duration: 0.15), value: selectedDestination == .settings)
+        .animation(.easeInOut(duration: 0.12), value: isSearchPresented)
         .fileImporter(
             isPresented: $isPickingProject,
             allowedContentTypes: [.folder],
             allowsMultipleSelection: false,
             onCompletion: handleProjectPick
         )
-        .preferredColorScheme(.dark)
     }
 
     private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            VStack(alignment: .leading, spacing: 6) {
-                SidebarActionButton(title: "New chat", systemImage: "square.and.pencil", action: addChat)
-                SidebarActionButton(title: "Search", systemImage: "magnifyingglass", action: {})
+        VStack(alignment: .leading, spacing: 0) {
+            // Header
+            SidebarHeader(openSearch: { isSearchPresented = true })
+                .padding(.bottom, 10)
+
+            SidebarModeSwitcher(mode: $sidebarMode)
+                .padding(.bottom, 10)
+
+            SidebarDivider()
+                .padding(.bottom, 10)
+
+            // Top actions
+            VStack(alignment: .leading, spacing: 3) {
+                SidebarActionButton(title: "New Chat", systemImage: "square.and.pencil", action: addChat)
+
                 SidebarActionButton(
                     title: "AI Models",
                     systemImage: "cpu",
@@ -63,64 +121,87 @@ struct ChatView: View {
                     selectedDestination = .aiModels
                 }
             }
-            .padding(6)
-            .background(Color.clear)
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(Color.clear, lineWidth: 1)
-            }
 
             SidebarDivider()
+                .padding(.top, 10)
+                .padding(.bottom, 14)
 
-            SidebarSection(
-                title: "Projects",
-                trailingSystemImage: "folder.badge.plus",
-                trailingAction: { isPickingProject = true },
-                isExpanded: isProjectsExpanded,
-                toggleExpansion: {
-                    withAnimation(.snappy) {
-                        isProjectsExpanded.toggle()
-                    }
-                }
-            ) {
-                if isProjectsExpanded {
-                    if projects.isEmpty {
-                        EmptySidebarRow(title: "Pick a project folder")
-                    } else {
-                        ForEach(projects) { project in
-                            VStack(alignment: .leading, spacing: 4) {
-                                SidebarItemRow(
-                                    title: project.title,
-                                    systemImage: "folder",
-                                    isSelected: selectedDestination == .chat && project.persistentModelID == selectedItemID,
-                                    trailingSystemImage: "square.and.pencil",
-                                    menuAction: selectedDestination == .chat && project.persistentModelID == selectedItemID ? { deleteProject(project) } : nil,
-                                    menuShowsOnHover: true,
-                                    trailingAction: { addChat(to: project) }
-                                ) {
-                                    selectedDestination = .chat
-                                    selectedItemID = project.persistentModelID
+            // Scrollable sections
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 18) {
+                    if sidebarMode == .code {
+                        SidebarSection(
+                            title: "CODE",
+                            trailingSystemImage: "folder.badge.plus",
+                            trailingAction: { isPickingProject = true }
+                        ) {
+                            if projects.isEmpty {
+                                SidebarEmptyState(
+                                    icon: "folder.badge.plus",
+                                    title: "No projects yet",
+                                    subtitle: "Pick a folder to browse its files.",
+                                    actionTitle: "Add Project",
+                                    action: { isPickingProject = true }
+                                )
+                            } else {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    ForEach(projects) { project in
+                                        ProjectCodeSection(
+                                            project: project,
+                                            expandedPaths: $expandedCodePaths,
+                                            selectedFilePath: $selectedCodeFilePath,
+                                            selectFile: { path in
+                                                selectedCodeFilePath = path
+                                                selectedDestination = .codeFile
+                                            },
+                                            removeProject: { deleteProject(project) }
+                                        )
+                                    }
                                 }
-
-                                ForEach(chats(for: project)) { chat in
-                                    SidebarItemRow(
-                                        title: chat.title,
-                                        systemImage: nil,
-                                        isSelected: selectedDestination == .chat && chat.persistentModelID == selectedItemID,
-                                        trailingSystemImage: "ellipsis",
-                                        trailingText: relativeTime(for: chat.timestamp),
-                                        leadingIndent: 26,
-                                        trailingUsesMenu: true,
-                                        isRenaming: renamingItemID == chat.persistentModelID,
-                                        renameText: $renameDraft,
-                                        renameAction: { beginRename(chat) },
-                                        commitRenameAction: { commitRename(chat) },
-                                        cancelRenameAction: cancelRename,
-                                        trailingAction: { deleteChat(chat) }
-                                    ) {
-                                        selectedDestination = .chat
-                                        selectedItemID = chat.persistentModelID
+                            }
+                        }
+                    } else {
+                        SidebarSection(
+                            title: "CHATS",
+                            trailingSystemImage: "square.and.pencil",
+                            trailingAction: addChat,
+                            isExpanded: isChatsExpanded,
+                            toggleExpansion: {
+                                withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) {
+                                    isChatsExpanded.toggle()
+                                }
+                            }
+                        ) {
+                            if isChatsExpanded {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    if chats.isEmpty {
+                                        SidebarEmptyState(
+                                            icon: "bubble.left.and.bubble.right",
+                                            title: "No chats yet",
+                                            subtitle: "Start a conversation with your local model.",
+                                            actionTitle: "New Chat",
+                                            action: addChat
+                                        )
+                                    } else {
+                                        ForEach(chats) { chat in
+                                            SidebarItemRow(
+                                                title: chat.title,
+                                                systemImage: nil,
+                                                isSelected: selectedDestination == .chat && chat.persistentModelID == selectedItemID,
+                                                trailingSystemImage: "ellipsis",
+                                                trailingText: relativeTime(for: chat.timestamp),
+                                                trailingUsesMenu: true,
+                                                isRenaming: renamingItemID == chat.persistentModelID,
+                                                renameText: $renameDraft,
+                                                renameAction: { beginRename(chat) },
+                                                commitRenameAction: { commitRename(chat) },
+                                                cancelRenameAction: cancelRename,
+                                                trailingAction: { deleteChat(chat) }
+                                            ) {
+                                                selectedDestination = .chat
+                                                selectedItemID = chat.persistentModelID
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -129,57 +210,24 @@ struct ChatView: View {
                 }
             }
 
-            SidebarDivider()
-
-            SidebarSection(
-                title: "Chats",
-                trailingSystemImage: "square.and.pencil",
-                trailingAction: addChat,
-                isExpanded: isChatsExpanded,
-                toggleExpansion: {
-                    withAnimation(.snappy) {
-                        isChatsExpanded.toggle()
-                    }
-                }
-            ) {
-                if isChatsExpanded {
-                    if chats.isEmpty {
-                        EmptySidebarRow(title: "No chats yet")
-                    } else {
-                        ForEach(chats) { chat in
-                            SidebarItemRow(
-                                title: chat.title,
-                                systemImage: nil,
-                                isSelected: selectedDestination == .chat && chat.persistentModelID == selectedItemID,
-                                trailingSystemImage: "ellipsis",
-                                trailingText: relativeTime(for: chat.timestamp),
-                                trailingUsesMenu: true,
-                                isRenaming: renamingItemID == chat.persistentModelID,
-                                renameText: $renameDraft,
-                                renameAction: { beginRename(chat) },
-                                commitRenameAction: { commitRename(chat) },
-                                cancelRenameAction: cancelRename,
-                                trailingAction: { deleteChat(chat) }
-                            ) {
-                                selectedDestination = .chat
-                                selectedItemID = chat.persistentModelID
-                            }
-                        }
-                    }
-                }
-            }
-
             Spacer()
+
+            SidebarDivider()
+                .padding(.vertical, 10)
 
             SidebarActionButton(title: "Settings", systemImage: "gearshape") {
                 isShowingSettingsMenu.toggle()
             }
             .popover(isPresented: $isShowingSettingsMenu, arrowEdge: .bottom) {
-                SettingsPopover()
+                SettingsPopover {
+                    isShowingSettingsMenu = false
+                    selectedDestination = .settings
+                }
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 20)
+        .padding(.horizontal, 11)
+        .padding(.top, 16)
+        .padding(.bottom, 14)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Color.mayuSidebarBackground)
     }
@@ -412,9 +460,25 @@ struct ChatView: View {
             return "\(seconds / 86_400)d"
         }
     }
+
+    private func handleSearchSelection(_ item: Item) {
+        if item.isProject {
+            sidebarMode = .code
+
+            if let path = item.projectPath {
+                expandedCodePaths.insert(path)
+            }
+        } else {
+            sidebarMode = .home
+            selectedDestination = .chat
+            selectedItemID = item.persistentModelID
+        }
+    }
 }
 
-private enum DetailDestination {
+private enum DetailDestination: Equatable {
     case chat
     case aiModels
+    case settings
+    case codeFile
 }

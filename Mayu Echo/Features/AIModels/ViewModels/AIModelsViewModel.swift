@@ -8,15 +8,42 @@ final class AIModelsViewModel: ObservableObject {
     @Published private(set) var addModelError: String?
 
     private let downloader: HuggingFaceModelDownloader
+    private let engine: LocalAIEngineRouter
 
-    init(models: [LLMModel]? = nil, downloader: HuggingFaceModelDownloader? = nil) {
+    init(
+        models: [LLMModel]? = nil,
+        downloader: HuggingFaceModelDownloader? = nil,
+        engine: LocalAIEngineRouter? = nil
+    ) {
         let resolvedDownloader = downloader ?? HuggingFaceModelDownloader()
         self.downloader = resolvedDownloader
-        self.models = (models ?? LLMModelCatalog.allModels).map { resolvedDownloader.modelWithLocalStatus($0) }
+        self.engine = engine ?? LocalAIEngineRouter()
+        self.models = (models ?? LLMModelCatalog.allModels).map {
+            Self.resolvedModel($0, downloader: resolvedDownloader)
+        }
     }
 
     func state(for model: LLMModel) -> ModelDownloadState {
         downloadStates[model.id] ?? (model.isDownloaded ? .downloaded : .notDownloaded)
+    }
+
+    func refresh() {
+        Task { [weak self] in
+            guard let self else {
+                return
+            }
+
+            let localModels = LLMModelCatalog.allModels.map {
+                Self.resolvedModel($0, downloader: self.downloader)
+            }
+
+            guard let providerModels = try? await engine.availableModels() else {
+                models = localModels
+                return
+            }
+
+            models = LLMModelCatalog.mergedModels(defaults: providerModels, custom: localModels)
+        }
     }
 
     func download(_ model: LLMModel) {
@@ -31,11 +58,62 @@ final class AIModelsViewModel: ObservableObject {
             return
         }
 
-        do {
-            try downloader.deleteDownloadedModel(model)
-            markDeleted(modelID: model.id)
-        } catch {
-            downloadStates[model.id] = .failed(error.localizedDescription)
+        Task { [weak self] in
+            guard let self else {
+                return
+            }
+
+            do {
+                switch model.provider {
+                case .mlx:
+                    try downloader.deleteDownloadedModel(model)
+                    markDeleted(modelID: model.id)
+                case .llamaCpp:
+                    downloadStates[model.id] = .failed("Remove GGUF files from their local folder for now.")
+                case .api:
+                    break
+                }
+            } catch {
+                downloadStates[model.id] = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    func load(_ model: LLMModel) {
+        downloadStates[model.id] = .loading
+
+        Task { [weak self] in
+            guard let self else {
+                return
+            }
+
+            do {
+                try await engine.load(model: model)
+                markLoaded(modelID: model.id, isLoaded: true)
+                downloadStates[model.id] = .downloaded
+                refresh()
+            } catch {
+                downloadStates[model.id] = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    func unload(_ model: LLMModel) {
+        downloadStates[model.id] = .unloading
+
+        Task { [weak self] in
+            guard let self else {
+                return
+            }
+
+            do {
+                try await engine.unload(model: model)
+                markLoaded(modelID: model.id, isLoaded: false)
+                downloadStates[model.id] = .downloaded
+                refresh()
+            } catch {
+                downloadStates[model.id] = .failed(error.localizedDescription)
+            }
         }
     }
 
@@ -56,7 +134,7 @@ final class AIModelsViewModel: ObservableObject {
     }
 
     func isCustomModel(_ model: LLMModel) -> Bool {
-        !LLMModel.defaultMLXModels.contains { $0.id == model.id }
+        !LLMModel.defaultManagedModels.contains { $0.id == model.id }
     }
 
     @discardableResult
@@ -89,15 +167,32 @@ final class AIModelsViewModel: ObservableObject {
             }
 
             do {
-                let localURL = try await downloader.download(model: model) { progress in
-                    self.downloadStates[model.id] = .downloading(progress: progress)
+                switch model.provider {
+                case .mlx:
+                    let localURL = try await downloader.download(model: model) { progress in
+                        self.downloadStates[model.id] = .downloading(progress: progress)
+                    }
+                    markDownloaded(
+                        modelID: model.id,
+                        resolvedModel: downloader.modelWithLocalStatus(model),
+                        fallbackLocalPath: localURL.path
+                    )
+                case .llamaCpp:
+                    try await engine.download(model: model) { progress in
+                        await MainActor.run {
+                            self.downloadStates[model.id] = .downloading(progress: progress)
+                        }
+                    }
+                    markDownloaded(
+                        modelID: model.id,
+                        resolvedModel: model,
+                        fallbackLocalPath: ""
+                    )
+                case .api:
+                    markDownloaded(modelID: model.id, resolvedModel: model, fallbackLocalPath: "")
                 }
-                markDownloaded(
-                    modelID: model.id,
-                    resolvedModel: downloader.modelWithLocalStatus(model),
-                    fallbackLocalPath: localURL.path
-                )
                 downloadStates[model.id] = .downloaded
+                refresh()
             } catch is CancellationError {
                 downloadStates[model.id] = .notDownloaded
             } catch {
@@ -116,8 +211,18 @@ final class AIModelsViewModel: ObservableObject {
         }
 
         models[index] = resolvedModel
-        models[index].localPath = resolvedModel.localPath ?? fallbackLocalPath
+        if resolvedModel.provider == .mlx {
+            models[index].localPath = resolvedModel.localPath ?? fallbackLocalPath
+        }
         models[index].isDownloaded = true
+    }
+
+    private func markLoaded(modelID: LLMModel.ID, isLoaded: Bool) {
+        guard let index = models.firstIndex(where: { $0.id == modelID }) else {
+            return
+        }
+
+        models[index].isLoaded = isLoaded
     }
 
     private func markDeleted(modelID: LLMModel.ID) {
@@ -132,13 +237,15 @@ final class AIModelsViewModel: ObservableObject {
     }
 
     private func persistCustomModels() {
-        let defaultIDs = Set(LLMModel.defaultMLXModels.map(\.id))
+        let defaultIDs = Set(LLMModel.defaultManagedModels.map(\.id))
         let customModels = models
             .filter { !defaultIDs.contains($0.id) }
+            .filter { $0.provider == .mlx }
             .map { model in
                 var storedModel = model
                 storedModel.localPath = nil
                 storedModel.isDownloaded = false
+                storedModel.isLoaded = false
                 return storedModel
             }
 
@@ -152,11 +259,21 @@ final class AIModelsViewModel: ObservableObject {
 
         return false
     }
+
+    private static func resolvedModel(_ model: LLMModel, downloader: HuggingFaceModelDownloader) -> LLMModel {
+        guard model.provider == .mlx else {
+            return model
+        }
+
+        return downloader.modelWithLocalStatus(model)
+    }
 }
 
 enum ModelDownloadState: Equatable {
     case notDownloaded
     case downloading(progress: Double)
+    case loading
+    case unloading
     case downloaded
     case failed(String)
 
@@ -166,6 +283,10 @@ enum ModelDownloadState: Equatable {
             return "Download"
         case .downloading(let progress):
             return "\(Int(progress * 100))%"
+        case .loading:
+            return "Loading"
+        case .unloading:
+            return "Unloading"
         case .downloaded:
             return "Downloaded"
         case .failed:
