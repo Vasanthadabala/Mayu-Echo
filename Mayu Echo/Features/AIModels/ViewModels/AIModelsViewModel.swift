@@ -69,7 +69,8 @@ final class AIModelsViewModel: ObservableObject {
                     try downloader.deleteDownloadedModel(model)
                     markDeleted(modelID: model.id)
                 case .llamaCpp:
-                    downloadStates[model.id] = .failed("Remove GGUF files from their local folder for now.")
+                    try downloader.deleteGGUFModel(model)
+                    markDeleted(modelID: model.id)
                 case .api:
                     break
                 }
@@ -178,15 +179,13 @@ final class AIModelsViewModel: ObservableObject {
                         fallbackLocalPath: localURL.path
                     )
                 case .llamaCpp:
-                    try await engine.download(model: model) { progress in
-                        await MainActor.run {
-                            self.downloadStates[model.id] = .downloading(progress: progress)
-                        }
+                    let localURL = try await downloader.downloadGGUF(model: model) { progress in
+                        self.downloadStates[model.id] = .downloading(progress: progress)
                     }
                     markDownloaded(
                         modelID: model.id,
-                        resolvedModel: model,
-                        fallbackLocalPath: ""
+                        resolvedModel: downloader.ggufModelWithLocalStatus(model),
+                        fallbackLocalPath: localURL.path
                     )
                 case .api:
                     markDownloaded(modelID: model.id, resolvedModel: model, fallbackLocalPath: "")
@@ -211,7 +210,7 @@ final class AIModelsViewModel: ObservableObject {
         }
 
         models[index] = resolvedModel
-        if resolvedModel.provider == .mlx {
+        if resolvedModel.provider == .mlx || resolvedModel.provider == .llamaCpp {
             models[index].localPath = resolvedModel.localPath ?? fallbackLocalPath
         }
         models[index].isDownloaded = true
@@ -261,11 +260,14 @@ final class AIModelsViewModel: ObservableObject {
     }
 
     private static func resolvedModel(_ model: LLMModel, downloader: HuggingFaceModelDownloader) -> LLMModel {
-        guard model.provider == .mlx else {
+        switch model.provider {
+        case .mlx:
+            return downloader.modelWithLocalStatus(model)
+        case .llamaCpp:
+            return downloader.ggufModelWithLocalStatus(model)
+        case .api:
             return model
         }
-
-        return downloader.modelWithLocalStatus(model)
     }
 }
 

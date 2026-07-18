@@ -123,6 +123,12 @@ actor RemoteAPIEngine: LLMEngine {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
 
+        // Optional OpenRouter-specific headers (appear on leaderboards)
+        if config.isOpenRouter {
+            request.setValue("https://mayu.app", forHTTPHeaderField: "HTTP-Referer")
+            request.setValue("Mayu Echo", forHTTPHeaderField: "X-Title")
+        }
+
         let payload: [String: Any] = [
             "model": config.modelID,
             "stream": true,

@@ -8,6 +8,7 @@ struct AppSettingsView: View {
     @State private var searchText = ""
     @State private var apiProviderConfigs: [APIProviderConfig] = APIProviderCatalog.all()
     @State private var editingConnection: APIProviderDraft?
+    @State private var showingOpenRouterSetup: Bool = false
 
     var body: some View {
         HStack(spacing: 0) {
@@ -220,7 +221,7 @@ struct AppSettingsView: View {
         case .mlx:
             return ("MLX", "Apple Silicon runtime for MLX-format models.", "Ready")
         case .llamaCpp:
-            return ("llama.cpp", "Native GGUF runtime slot for broad quantized model support.", "Pending")
+            return ("llama.cpp", "Native GGUF runtime for broad quantized model support.", "Ready")
         case .api:
             return ("API", "Chat through a private or company-hosted API connection.", "Ready")
         }
@@ -263,8 +264,48 @@ struct AppSettingsView: View {
                     }
                 }
 
+                // OpenRouter quick-add card
+                Button(action: { showingOpenRouterSetup = true }) {
+                    HStack(spacing: 10) {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .fill(Color.teal.opacity(0.15))
+                                .frame(width: 28, height: 28)
+                            Image(systemName: "globe.americas.fill")
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(Color.teal)
+                        }
+
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("Add OpenRouter")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(.primary)
+                            Text("Free models, guided setup")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Spacer()
+
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background {
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(Color.mayuPanelBackground)
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .stroke(Color.teal.opacity(0.25), lineWidth: 1)
+                            }
+                    }
+                }
+                .buttonStyle(.plain)
+
                 Button(action: beginAddingConnection) {
-                    Label("Add connection", systemImage: "plus")
+                    Label("Add custom connection", systemImage: "plus")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(Color.mayuOnAccent)
                         .padding(.horizontal, 14)
@@ -281,6 +322,15 @@ struct AppSettingsView: View {
                 draft: draft,
                 onSave: saveConnection,
                 onCancel: { editingConnection = nil }
+            )
+        }
+        .sheet(isPresented: $showingOpenRouterSetup) {
+            OpenRouterSetupSheet(
+                onSave: { draft in
+                    saveConnection(draft)
+                    showingOpenRouterSetup = false
+                },
+                onCancel: { showingOpenRouterSetup = false }
             )
         }
     }

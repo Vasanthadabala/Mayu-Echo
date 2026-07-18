@@ -56,8 +56,34 @@ nonisolated struct APIProviderConfig: Identifiable, Codable, Hashable, Sendable 
     }
 }
 
+// MARK: - OpenRouter convenience factory
+
+nonisolated extension APIProviderConfig {
+    /// Creates a pre-filled `APIProviderConfig` pointed at OpenRouter's
+    /// OpenAI-compatible endpoint.  The caller only needs to supply a
+    /// model identifier (e.g. `"qwen/qwen3-coder:free"`) and an optional
+    /// human-readable display name.
+    static func openRouter(modelID: String, name: String? = nil) -> APIProviderConfig {
+        APIProviderConfig(
+            name: name ?? modelID,
+            baseURL: OpenRouterCatalog.baseURL,
+            format: .openAICompatible,
+            modelID: modelID
+        )
+    }
+
+    /// Returns `true` when this config targets OpenRouter.
+    var isOpenRouter: Bool {
+        normalizedBaseURL.contains("openrouter.ai")
+    }
+}
+
 nonisolated enum APIProviderCatalog {
     private static let storageKey = "mayu.apiProviderConfigs.v1"
+
+    /// Posted on the main queue whenever the catalog changes (add, edit, or delete).
+    /// Observers can use this to refresh their available-model lists.
+    static let didChange = Notification.Name("APIProviderCatalog.didChange")
 
     static func all() -> [APIProviderConfig] {
         guard let data = UserDefaults.standard.data(forKey: storageKey),
@@ -92,6 +118,10 @@ nonisolated enum APIProviderCatalog {
             KeychainStore.save(apiKey, forAccount: config.id)
         }
 
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: didChange, object: nil)
+        }
+
         return config
     }
 
@@ -100,6 +130,9 @@ nonisolated enum APIProviderCatalog {
         configs.removeAll { $0.id == config.id }
         save(configs)
         KeychainStore.delete(forAccount: config.id)
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: didChange, object: nil)
+        }
     }
 
     static func apiKey(for config: APIProviderConfig) -> String? {

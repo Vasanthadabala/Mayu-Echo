@@ -553,7 +553,7 @@ private extension LLMModel {
     }
 
     var supportsDelete: Bool {
-        provider == .mlx
+        provider == .mlx || provider == .llamaCpp
     }
 }
 

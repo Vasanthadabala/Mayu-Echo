@@ -183,7 +183,10 @@ final class AppSettings: ObservableObject {
             return model
         }
 
-        return models.first { $0.provider == preferredProvider } ?? models.first
+        // Only fall back within the active provider. Never cross to another provider's
+        // first model — doing so would flip `preferredProvider` and bounce an engine that
+        // simply has no models available (e.g. API with no connection configured).
+        return models.first { $0.provider == preferredProvider }
     }
 
     private func saveGenerationOptions() {

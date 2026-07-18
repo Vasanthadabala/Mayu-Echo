@@ -67,6 +67,9 @@ struct ChatDetailView: View {
         .onChange(of: appSettingsSignature) {
             viewModel.apply(settings: appSettings)
         }
+        .onReceive(NotificationCenter.default.publisher(for: APIProviderCatalog.didChange)) { _ in
+            viewModel.refreshAvailableModels()
+        }
         .onChange(of: appSettings.generationOptions) {
             viewModel.generationOptions = appSettings.generationOptions
         }

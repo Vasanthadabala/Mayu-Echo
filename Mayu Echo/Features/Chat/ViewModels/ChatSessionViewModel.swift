@@ -532,10 +532,13 @@ final class ChatSessionViewModel: ObservableObject {
     }
 
     private static func resolvedModel(_ model: LLMModel, downloader: HuggingFaceModelDownloader) -> LLMModel {
-        guard model.provider == .mlx else {
+        switch model.provider {
+        case .mlx:
+            return downloader.modelWithLocalStatus(model)
+        case .llamaCpp:
+            return downloader.ggufModelWithLocalStatus(model)
+        case .api:
             return model
         }
-
-        return downloader.modelWithLocalStatus(model)
     }
 }

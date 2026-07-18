@@ -112,6 +112,123 @@ nonisolated final class HuggingFaceModelDownloader {
         try fileManager.removeItem(at: directory)
     }
 
+    // MARK: - GGUF (llama.cpp) single-file models
+
+    func ggufModelWithLocalStatus(_ model: LLMModel) -> LLMModel {
+        var resolved = model
+        let isComplete = fileManager.fileExists(atPath: ggufCompletionMarkerURL(for: model).path)
+        let fileURL = isComplete ? ggufFileURL(for: model) : nil
+
+        resolved.localPath = fileURL?.path
+        resolved.isDownloaded = fileURL != nil
+        return resolved
+    }
+
+    func ggufFileURL(for model: LLMModel) -> URL? {
+        let directory = ggufDirectory(for: model)
+
+        guard let files = try? fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil
+        ) else {
+            return nil
+        }
+
+        return files.first { $0.pathExtension.lowercased() == "gguf" }
+    }
+
+    func deleteGGUFModel(_ model: LLMModel) throws {
+        let directory = ggufDirectory(for: model)
+
+        guard fileManager.fileExists(atPath: directory.path) else {
+            return
+        }
+
+        try fileManager.removeItem(at: directory)
+    }
+
+    func downloadGGUF(
+        model: LLMModel,
+        progress: @MainActor @escaping (Double) -> Void
+    ) async throws -> URL {
+        if fileManager.fileExists(atPath: ggufCompletionMarkerURL(for: model).path),
+           let existing = ggufFileURL(for: model) {
+            await progress(1)
+            return existing
+        }
+
+        await progress(0.01)
+
+        let info = try await fetchModelInfo(repository: model.repository)
+        let candidates = info.siblings.filter { sibling in
+            let name = sibling.rfilename.lowercased()
+            return name.hasSuffix(".gguf") && !name.contains("-of-")
+        }
+
+        guard let chosen = preferredGGUF(from: candidates) else {
+            throw HuggingFaceDownloadError.emptyRepository(model.repository)
+        }
+
+        let directory = ggufDirectory(for: model)
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        let destinationURL = directory.appendingPathComponent(chosen.rfilename)
+        let expectedSize = chosen.downloadSize
+
+        if !fileManager.fileExists(atPath: destinationURL.path) {
+            let sourceURL = resolveURL(repository: model.repository, filename: chosen.rfilename)
+            let partialURL = partialFileURL(for: destinationURL)
+
+            let response = try await downloadFile(
+                from: sourceURL,
+                destinationURL: destinationURL,
+                partialURL: partialURL,
+                expectedSize: expectedSize
+            ) { downloadedBytes in
+                Task { @MainActor in
+                    progress(self.progressValue(
+                        completedBytes: downloadedBytes,
+                        totalBytes: expectedSize ?? max(downloadedBytes, 1)
+                    ))
+                }
+            }
+
+            try validate(response: response, filename: chosen.rfilename)
+        }
+
+        try Data().write(to: ggufCompletionMarkerURL(for: model), options: .atomic)
+        await progress(1)
+        return destinationURL
+    }
+
+    private func preferredGGUF(from candidates: [HuggingFaceModelInfo.Sibling]) -> HuggingFaceModelInfo.Sibling? {
+        let priorities = ["q4_k_m", "q4_k_s", "q4_0", "q5_k_m", "q8_0"]
+
+        for keyword in priorities {
+            if let match = candidates.first(where: { $0.rfilename.lowercased().contains(keyword) }) {
+                return match
+            }
+        }
+
+        return candidates.first
+    }
+
+    private var ggufModelsDirectory: URL {
+        let applicationSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        return applicationSupport
+            .appendingPathComponent("Mayu Echo", isDirectory: true)
+            .appendingPathComponent("GGUF Models", isDirectory: true)
+    }
+
+    private func ggufDirectory(for model: LLMModel) -> URL {
+        ggufModelsDirectory
+            .appendingPathComponent(model.repository.replacingOccurrences(of: "/", with: "--"), isDirectory: true)
+    }
+
+    private func ggufCompletionMarkerURL(for model: LLMModel) -> URL {
+        ggufDirectory(for: model).appendingPathComponent(".download-complete")
+    }
+
     private func fetchModelInfo(repository: String) async throws -> HuggingFaceModelInfo {
         let url = modelAPIURL(repository: repository)
         let (data, response) = try await URLSession.shared.data(from: url)
