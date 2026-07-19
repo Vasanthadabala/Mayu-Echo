@@ -2,71 +2,70 @@ import SwiftUI
 import AppKit
 
 extension Color {
-    // Warm neutral surfaces — cream in light mode, warm charcoal in dark mode.
+    // Neutral gray surfaces — near-white in light mode, near-black in dark mode.
     static let mayuChatBackground = adaptive(
-        light: NSColor(srgbRed: 0.980, green: 0.976, blue: 0.965, alpha: 1), // #FAF9F6
-        dark: NSColor(srgbRed: 0.098, green: 0.086, blue: 0.078, alpha: 1)   // #191614
+        light: NSColor(srgbRed: 0.976, green: 0.976, blue: 0.976, alpha: 1), // #F9F9F9
+        dark: NSColor(srgbRed: 0.090, green: 0.090, blue: 0.090, alpha: 1)   // #171717
     )
     static let mayuSidebarBackground = adaptive(
-        light: NSColor(srgbRed: 0.953, green: 0.945, blue: 0.918, alpha: 1), // #F3F1EA
-        dark: NSColor(srgbRed: 0.125, green: 0.110, blue: 0.098, alpha: 1)   // #201C19
+        light: NSColor(srgbRed: 0.939, green: 0.939, blue: 0.939, alpha: 1), // #F0F0F0
+        dark: NSColor(srgbRed: 0.114, green: 0.114, blue: 0.114, alpha: 1)   // #1D1D1D
     )
     static let mayuPanelBackground = adaptive(
-        light: NSColor(srgbRed: 1.000, green: 0.996, blue: 0.984, alpha: 0.90),
-        dark: NSColor(srgbRed: 0.149, green: 0.133, blue: 0.125, alpha: 0.92)
+        light: NSColor(srgbRed: 0.993, green: 0.993, blue: 0.993, alpha: 0.90),
+        dark: NSColor(srgbRed: 0.136, green: 0.136, blue: 0.136, alpha: 0.92)
     )
     static let mayuElevatedBackground = adaptive(
-        light: NSColor(srgbRed: 0.937, green: 0.929, blue: 0.894, alpha: 1), // #EFEDE4
-        dark: NSColor(srgbRed: 0.173, green: 0.153, blue: 0.141, alpha: 1)   // #2C2724
+        light: NSColor(srgbRed: 0.920, green: 0.920, blue: 0.920, alpha: 1), // #EBEBEB
+        dark: NSColor(srgbRed: 0.156, green: 0.156, blue: 0.156, alpha: 1)   // #282828
     )
     static let mayuSelection = adaptive(
-        light: NSColor(srgbRed: 0.918, green: 0.902, blue: 0.855, alpha: 1), // #EAE6DA
-        dark: NSColor(srgbRed: 0.200, green: 0.176, blue: 0.161, alpha: 1)   // #332D29
+        light: NSColor(srgbRed: 0.892, green: 0.892, blue: 0.892, alpha: 1), // #E3E3E3
+        dark: NSColor(srgbRed: 0.179, green: 0.179, blue: 0.179, alpha: 1)   // #2E2E2E
     )
     static let mayuUserBubble = adaptive(
-        light: NSColor(srgbRed: 0.937, green: 0.918, blue: 0.882, alpha: 1), // #EFEAE1
-        dark: NSColor(srgbRed: 0.180, green: 0.161, blue: 0.145, alpha: 1)   // #2E2925
+        light: NSColor(srgbRed: 0.912, green: 0.912, blue: 0.912, alpha: 1), // #E9E9E9
+        dark: NSColor(srgbRed: 0.162, green: 0.162, blue: 0.162, alpha: 1)   // #292929
     )
     static let mayuCodeBackground = adaptive(
-        light: NSColor(srgbRed: 0.925, green: 0.910, blue: 0.867, alpha: 1), // #ECE8DD
-        dark: NSColor(srgbRed: 0.129, green: 0.114, blue: 0.102, alpha: 1)   // #211D1A
+        light: NSColor(srgbRed: 0.901, green: 0.901, blue: 0.901, alpha: 1), // #E6E6E6
+        dark: NSColor(srgbRed: 0.115, green: 0.115, blue: 0.115, alpha: 1)   // #1D1D1D
     )
     static let mayuComposerBackground = adaptive(
-        light: NSColor(srgbRed: 0.988, green: 0.984, blue: 0.973, alpha: 1), // #FCFBF8
-        dark: NSColor(srgbRed: 0.141, green: 0.122, blue: 0.110, alpha: 1)   // #241F1C
+        light: NSColor(srgbRed: 0.982, green: 0.982, blue: 0.982, alpha: 1), // #FAFAFA
+        dark: NSColor(srgbRed: 0.124, green: 0.124, blue: 0.124, alpha: 1)   // #1F1F1F
     )
 
     static let mayuBorder = adaptive(light: NSColor(white: 0.0, alpha: 0.07), dark: NSColor(white: 1.0, alpha: 0.065))
     static let mayuStrongBorder = adaptive(light: NSColor(white: 0.0, alpha: 0.13), dark: NSColor(white: 1.0, alpha: 0.11))
 
-    // Signature terracotta accent (Claude-inspired), tuned per appearance for legible icon/text tinting.
+    // Neutral gray accent — light gray on dark backgrounds, dark gray on light
+    // backgrounds. No hue at all, so icon/text tinting reads as black-and-gray, not colored.
     static let mayuAccent = adaptive(
-        light: NSColor(srgbRed: 0.757, green: 0.376, blue: 0.239, alpha: 1), // #C1603D
-        dark: NSColor(srgbRed: 0.886, green: 0.537, blue: 0.373, alpha: 1)  // #E2895F
+        light: NSColor(white: 0.35, alpha: 1),
+        dark: NSColor(white: 0.80, alpha: 1)
     )
     static let mayuAccentSoft = adaptive(
-        light: NSColor(srgbRed: 0.757, green: 0.376, blue: 0.239, alpha: 0.13),
-        dark: NSColor(srgbRed: 0.886, green: 0.537, blue: 0.373, alpha: 0.17)
+        light: NSColor(white: 0.0, alpha: 0.06),
+        dark: NSColor(white: 1.0, alpha: 0.10)
     )
 
     /// Fixed-brightness accent for solid fills (primary buttons). Always pair with `mayuOnAccent`
     /// so contrast holds regardless of the surrounding light/dark appearance.
-    static let mayuAccentSolid = Color(NSColor(srgbRed: 0.741, green: 0.357, blue: 0.224, alpha: 1)) // #BD5B39
+    static let mayuAccentSolid = Color(NSColor(white: 0.20, alpha: 1))
     /// Foreground for content drawn on top of `mayuAccentSolid` / `mayuWarning`.
-    static let mayuOnAccent = Color(NSColor(srgbRed: 1.0, green: 0.973, blue: 0.949, alpha: 1)) // #FFF8F2
+    static let mayuOnAccent = Color(NSColor(white: 0.97, alpha: 1))
 
-    /// Fixed warm red for destructive/stop states, always paired with `mayuOnAccent`.
-    static let mayuWarning = Color(NSColor(srgbRed: 0.722, green: 0.251, blue: 0.165, alpha: 1)) // #B8402A
+    /// Fixed medium gray for destructive/stop states, always paired with `mayuOnAccent`.
+    /// Distinct from `mayuAccentSolid` by lightness only — no hue, so it stays legible as
+    /// both a plain icon (on either light or dark backgrounds) and a solid fill (under
+    /// `mayuOnAccent`'s near-white text/icon) without needing to be red.
+    static let mayuWarning = Color(NSColor(white: 0.40, alpha: 1))
 
-    // Git-diff semantics, tuned warm so they sit naturally on the cream/charcoal surfaces.
-    static let mayuDiffAdded = adaptive(
-        light: NSColor(srgbRed: 0.267, green: 0.498, blue: 0.220, alpha: 1), // #447F38
-        dark: NSColor(srgbRed: 0.463, green: 0.702, blue: 0.396, alpha: 1)  // #76B365
-    )
-    static let mayuDiffRemoved = adaptive(
-        light: NSColor(srgbRed: 0.722, green: 0.251, blue: 0.165, alpha: 1), // #B8402A
-        dark: NSColor(srgbRed: 0.847, green: 0.408, blue: 0.318, alpha: 1)  // #D86851
-    )
+    // Diff add/remove — distinguished by weight (bold vs muted), not hue, matching the
+    // "+"/"-" prefix that already carries the meaning.
+    static let mayuDiffAdded = Color.primary
+    static let mayuDiffRemoved = Color.secondary
 
     private static func adaptive(light: NSColor, dark: NSColor) -> Color {
         Color(nsColor: NSColor(name: nil) { appearance in

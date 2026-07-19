@@ -56,8 +56,10 @@ actor LlamaCppEngine: LLMEngine {
     func streamChat(
         messages: [LLMMessage],
         model: LLMModel,
-        options: LLMGenerationOptions
+        options: LLMGenerationOptions,
+        toolsEnabled: Bool
     ) async -> AsyncThrowingStream<LLMStreamEvent, Error> {
+        // toolsEnabled ignored — llama.cpp tool-calling isn't implemented yet.
         generationTask?.cancel()
 
         let generationID = UUID()

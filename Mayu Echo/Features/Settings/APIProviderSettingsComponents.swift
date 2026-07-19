@@ -27,10 +27,10 @@ struct APIProviderRow: View {
                     if config.isOpenRouter {
                         Text("OpenRouter")
                             .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(Color.teal)
+                            .foregroundStyle(Color.mayuAccent)
                             .padding(.horizontal, 7)
                             .padding(.vertical, 2)
-                            .background(Color.teal.opacity(0.12))
+                            .background(Color.mayuAccent.opacity(0.12))
                             .clipShape(Capsule())
                     } else {
                         Text(config.format.rawValue)
@@ -240,11 +240,11 @@ struct OpenRouterSetupSheet: View {
             HStack(spacing: 12) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Color.teal.opacity(0.15))
+                        .fill(Color.mayuAccent.opacity(0.15))
                         .frame(width: 40, height: 40)
                     Image(systemName: "globe.americas.fill")
                         .font(.system(size: 18, weight: .medium))
-                        .foregroundStyle(Color.teal)
+                        .foregroundStyle(Color.mayuAccent)
                 }
 
                 VStack(alignment: .leading, spacing: 2) {
@@ -274,7 +274,7 @@ struct OpenRouterSetupSheet: View {
 
                         Link("Get a free key →", destination: URL(string: "https://openrouter.ai/keys")!)
                             .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(Color.teal)
+                            .foregroundStyle(Color.mayuAccent)
                     }
 
                     HStack(spacing: 8) {
@@ -331,7 +331,7 @@ struct OpenRouterSetupSheet: View {
                                 Task { await refreshModels() }
                             }
                             .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(Color.teal)
+                            .foregroundStyle(Color.mayuAccent)
                             .buttonStyle(.plain)
                         }
                     }
@@ -398,7 +398,7 @@ struct OpenRouterSetupSheet: View {
                 HStack(alignment: .top, spacing: 8) {
                     Image(systemName: "info.circle")
                         .font(.system(size: 12))
-                        .foregroundStyle(Color.teal)
+                        .foregroundStyle(Color.mayuAccent)
                         .padding(.top, 1)
                     Text("Free models on OpenRouter may have rate limits. The base URL is pre-filled automatically.")
                         .font(.system(size: 12))
@@ -407,10 +407,10 @@ struct OpenRouterSetupSheet: View {
                 .padding(10)
                 .background {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(Color.teal.opacity(0.07))
+                        .fill(Color.mayuAccent.opacity(0.07))
                         .overlay {
                             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .stroke(Color.teal.opacity(0.2), lineWidth: 1)
+                                .stroke(Color.mayuAccent.opacity(0.2), lineWidth: 1)
                         }
                 }
             }
@@ -434,7 +434,7 @@ struct OpenRouterSetupSheet: View {
                         .padding(.horizontal, 16)
                         .padding(.vertical, 8)
                         .background {
-                            Capsule().fill(isValid ? Color.teal : Color.secondary.opacity(0.15))
+                            Capsule().fill(isValid ? Color.mayuAccent : Color.secondary.opacity(0.15))
                         }
                 }
                 .buttonStyle(.plain)

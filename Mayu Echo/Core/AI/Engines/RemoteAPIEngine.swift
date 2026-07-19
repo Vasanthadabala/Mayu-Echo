@@ -24,7 +24,8 @@ actor RemoteAPIEngine: LLMEngine {
     func streamChat(
         messages: [LLMMessage],
         model: LLMModel,
-        options: LLMGenerationOptions
+        options: LLMGenerationOptions,
+        toolsEnabled: Bool
     ) async -> AsyncThrowingStream<LLMStreamEvent, Error> {
         generationTask?.cancel()
 
@@ -35,6 +36,7 @@ actor RemoteAPIEngine: LLMEngine {
                 messages: messages,
                 model: model,
                 options: options,
+                toolsEnabled: toolsEnabled,
                 continuation: stream.continuation
             )
             clearGenerationTask(id: generationID)
@@ -68,6 +70,7 @@ actor RemoteAPIEngine: LLMEngine {
         messages: [LLMMessage],
         model: LLMModel,
         options: LLMGenerationOptions,
+        toolsEnabled: Bool,
         continuation: AsyncThrowingStream<LLMStreamEvent, Error>.Continuation
     ) async {
         do {
@@ -88,6 +91,7 @@ actor RemoteAPIEngine: LLMEngine {
                     apiKey: apiKey,
                     messages: messages,
                     options: options,
+                    toolsEnabled: toolsEnabled,
                     continuation: continuation
                 )
             case .anthropicCompatible:
@@ -96,6 +100,7 @@ actor RemoteAPIEngine: LLMEngine {
                     apiKey: apiKey,
                     messages: messages,
                     options: options,
+                    toolsEnabled: toolsEnabled,
                     continuation: continuation
                 )
             }
@@ -107,11 +112,14 @@ actor RemoteAPIEngine: LLMEngine {
         }
     }
 
+    // MARK: - OpenAI-compatible
+
     private func streamOpenAICompatible(
         config: APIProviderConfig,
         apiKey: String,
         messages: [LLMMessage],
         options: LLMGenerationOptions,
+        toolsEnabled: Bool,
         continuation: AsyncThrowingStream<LLMStreamEvent, Error>.Continuation
     ) async throws {
         guard let url = URL(string: "\(config.normalizedBaseURL)/chat/completions") else {
@@ -129,21 +137,25 @@ actor RemoteAPIEngine: LLMEngine {
             request.setValue("Mayu Echo", forHTTPHeaderField: "X-Title")
         }
 
-        let payload: [String: Any] = [
+        var payload: [String: Any] = [
             "model": config.modelID,
             "stream": true,
             "temperature": options.temperature,
             "top_p": options.topP,
             "max_tokens": options.maxTokens,
-            "messages": messages.map { message in
-                ["role": openAIRole(for: message.role), "content": message.content]
-            }
+            "messages": messages.map(openAIMessageJSON)
         ]
+
+        if toolsEnabled {
+            payload["tools"] = ProjectAgentTools.toolSchemas
+        }
 
         request.httpBody = try JSONSerialization.data(withJSONObject: payload)
 
         let (bytes, response) = try await URLSession.shared.bytes(for: request)
         try await validate(response: response, bytes: bytes)
+
+        var pendingToolCalls: [Int: PendingToolCall] = [:]
 
         for try await line in bytes.lines {
             guard !Task.isCancelled else {
@@ -164,21 +176,79 @@ actor RemoteAPIEngine: LLMEngine {
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let choices = json["choices"] as? [[String: Any]],
                   let first = choices.first,
-                  let delta = first["delta"] as? [String: Any],
-                  let content = delta["content"] as? String,
-                  !content.isEmpty else {
+                  let delta = first["delta"] as? [String: Any] else {
                 continue
             }
 
-            continuation.yield(.token(content))
+            if let content = delta["content"] as? String, !content.isEmpty {
+                continuation.yield(.token(content))
+            }
+
+            if let toolCallDeltas = delta["tool_calls"] as? [[String: Any]] {
+                for toolCallDelta in toolCallDeltas {
+                    guard let index = toolCallDelta["index"] as? Int else {
+                        continue
+                    }
+
+                    var pending = pendingToolCalls[index] ?? PendingToolCall()
+
+                    if let id = toolCallDelta["id"] as? String {
+                        pending.id = id
+                    }
+
+                    if let function = toolCallDelta["function"] as? [String: Any] {
+                        if let name = function["name"] as? String {
+                            pending.name = (pending.name ?? "") + name
+                        }
+
+                        if let argumentsFragment = function["arguments"] as? String {
+                            pending.arguments += argumentsFragment
+                        }
+                    }
+
+                    pendingToolCalls[index] = pending
+
+                    if let name = pending.name {
+                        continuation.yield(.toolCallProgress(index: index, name: name, argumentsJSON: pending.arguments))
+                    }
+                }
+            }
+        }
+
+        finalizeOpenAIToolCalls(pendingToolCalls, continuation: continuation)
+    }
+
+    private func finalizeOpenAIToolCalls(
+        _ pendingToolCalls: [Int: PendingToolCall],
+        continuation: AsyncThrowingStream<LLMStreamEvent, Error>.Continuation
+    ) {
+        guard !pendingToolCalls.isEmpty else {
+            return
+        }
+
+        let toolCalls = pendingToolCalls
+            .sorted { $0.key < $1.key }
+            .compactMap { _, pending -> ToolCallRequest? in
+                guard let id = pending.id, let name = pending.name else {
+                    return nil
+                }
+
+                return ToolCallRequest(id: id, name: name, argumentsJSON: pending.arguments)
+            }
+
+        if !toolCalls.isEmpty {
+            continuation.yield(.toolCalls(toolCalls))
         }
     }
+
+    // MARK: - Anthropic-compatible
 
     private func streamAnthropicCompatible(
         config: APIProviderConfig,
         apiKey: String,
         messages: [LLMMessage],
         options: LLMGenerationOptions,
+        toolsEnabled: Bool,
         continuation: AsyncThrowingStream<LLMStreamEvent, Error>.Continuation
     ) async throws {
         guard let url = URL(string: "\(config.normalizedBaseURL)/messages") else {
@@ -192,7 +262,7 @@ actor RemoteAPIEngine: LLMEngine {
         request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
 
         let systemText = messages.first { $0.role == .system }?.content
-        let conversationMessages = anthropicMessages(from: messages.filter { $0.role != .system })
+        let conversationMessages = anthropicMessageBlocks(from: messages.filter { $0.role != .system })
 
         var payload: [String: Any] = [
             "model": config.modelID,
@@ -207,10 +277,32 @@ actor RemoteAPIEngine: LLMEngine {
             payload["system"] = systemText
         }
 
+        if toolsEnabled {
+            payload["tools"] = ProjectAgentTools.anthropicToolSchemas
+        }
+
         request.httpBody = try JSONSerialization.data(withJSONObject: payload)
 
         let (bytes, response) = try await URLSession.shared.bytes(for: request)
         try await validate(response: response, bytes: bytes)
+
+        var blocks: [Int: AnthropicBlock] = [:]
+
+        func finalizeToolCalls() {
+            let toolCalls = blocks
+                .sorted { $0.key < $1.key }
+                .compactMap { _, block -> ToolCallRequest? in
+                    guard block.type == "tool_use", let id = block.id, let name = block.name else {
+                        return nil
+                    }
+
+                    return ToolCallRequest(id: id, name: name, argumentsJSON: block.accumulated)
+                }
+
+            if !toolCalls.isEmpty {
+                continuation.yield(.toolCalls(toolCalls))
+            }
+        }
 
         for try await line in bytes.lines {
             guard !Task.isCancelled else {
@@ -229,38 +321,117 @@ actor RemoteAPIEngine: LLMEngine {
                 continue
             }
 
-            if type == "content_block_delta",
-               let delta = json["delta"] as? [String: Any],
-               let text = delta["text"] as? String {
-                continuation.yield(.token(text))
-            }
+            switch type {
+            case "content_block_start":
+                guard let index = json["index"] as? Int,
+                      let contentBlock = json["content_block"] as? [String: Any],
+                      let blockType = contentBlock["type"] as? String else {
+                    continue
+                }
 
-            if type == "message_stop" {
-                break
+                var block = AnthropicBlock(type: blockType)
+
+                if blockType == "tool_use" {
+                    block.id = contentBlock["id"] as? String
+                    block.name = contentBlock["name"] as? String
+                }
+
+                blocks[index] = block
+
+            case "content_block_delta":
+                guard let index = json["index"] as? Int, let delta = json["delta"] as? [String: Any] else {
+                    continue
+                }
+
+                if let text = delta["text"] as? String {
+                    blocks[index]?.accumulated += text
+                    continuation.yield(.token(text))
+                } else if let partialJSON = delta["partial_json"] as? String {
+                    blocks[index]?.accumulated += partialJSON
+
+                    if let name = blocks[index]?.name {
+                        continuation.yield(.toolCallProgress(index: index, name: name, argumentsJSON: blocks[index]?.accumulated ?? ""))
+                    }
+                }
+
+            case "message_stop":
+                finalizeToolCalls()
+                return
+
+            default:
+                continue
             }
         }
+
+        finalizeToolCalls()
     }
 
-    /// Anthropic's Messages API requires strict user/assistant alternation starting with "user".
-    private func anthropicMessages(from messages: [LLMMessage]) -> [[String: String]] {
-        var result: [[String: String]] = []
+    /// Anthropic's Messages API requires strict user/assistant alternation starting with
+    /// "user", and structured content blocks (not plain strings) once tool use is involved.
+    private func anthropicMessageBlocks(from messages: [LLMMessage]) -> [[String: Any]] {
+        var result: [[String: Any]] = []
 
-        for message in messages {
-            let role = anthropicRole(for: message.role)
-
-            if let lastIndex = result.indices.last, result[lastIndex]["role"] == role {
-                result[lastIndex]["content"] = (result[lastIndex]["content"] ?? "") + "\n\n" + message.content
+        func append(role: String, block: [String: Any]) {
+            if let lastIndex = result.indices.last, result[lastIndex]["role"] as? String == role {
+                var content = result[lastIndex]["content"] as? [[String: Any]] ?? []
+                content.append(block)
+                result[lastIndex]["content"] = content
             } else {
-                result.append(["role": role, "content": message.content])
+                result.append(["role": role, "content": [block]])
             }
         }
 
-        if let first = result.first, first["role"] != "user" {
-            result.insert(["role": "user", "content": "(continued)"], at: 0)
+        for message in messages {
+            switch message.role {
+            case .system:
+                continue
+
+            case .user:
+                append(role: "user", block: ["type": "text", "text": message.content])
+
+            case .assistant:
+                var addedAny = false
+
+                if !message.content.isEmpty {
+                    append(role: "assistant", block: ["type": "text", "text": message.content])
+                    addedAny = true
+                }
+
+                for call in message.toolCalls ?? [] {
+                    let input = (try? JSONSerialization.jsonObject(
+                        with: Data(call.argumentsJSON.utf8)
+                    )) as? [String: Any] ?? [:]
+
+                    append(role: "assistant", block: [
+                        "type": "tool_use",
+                        "id": call.id,
+                        "name": call.name,
+                        "input": input
+                    ])
+                    addedAny = true
+                }
+
+                if !addedAny {
+                    append(role: "assistant", block: ["type": "text", "text": " "])
+                }
+
+            case .tool:
+                append(role: "user", block: [
+                    "type": "tool_result",
+                    "tool_use_id": message.toolCallID ?? "",
+                    "content": message.content
+                ])
+            }
+        }
+
+        if let first = result.first, first["role"] as? String != "user" {
+            result.insert(["role": "user", "content": [["type": "text", "text": "(continued)"]]], at: 0)
         }
 
         return result
     }
+
+    // MARK: - Shared
 
     private func validate(response: URLResponse, bytes: URLSession.AsyncBytes) async throws {
         guard let httpResponse = response as? HTTPURLResponse else {
@@ -293,10 +464,53 @@ actor RemoteAPIEngine: LLMEngine {
         }
     }
 
-    private func anthropicRole(for role: LLMMessage.Role) -> String {
-        switch role {
-        case .user, .tool, .system: return "user"
-        case .assistant: return "assistant"
+    /// Maps a message to OpenAI's chat-completions JSON shape, including the
+    /// `tool_calls` array on assistant messages and `tool_call_id` on tool results —
+    /// both required for the model to correctly follow a multi-turn tool-use exchange.
+    private func openAIMessageJSON(_ message: LLMMessage) -> [String: Any] {
+        if message.role == .tool {
+            var json: [String: Any] = [
+                "role": "tool",
+                "content": message.content
+            ]
+
+            if let toolCallID = message.toolCallID {
+                json["tool_call_id"] = toolCallID
+            }
+
+            return json
         }
+
+        if message.role == .assistant, let toolCalls = message.toolCalls, !toolCalls.isEmpty {
+            return [
+                "role": "assistant",
+                "content": message.content,
+                "tool_calls": toolCalls.map { call in
+                    [
+                        "id": call.id,
+                        "type": "function",
+                        "function": [
+                            "name": call.name,
+                            "arguments": call.argumentsJSON
+                        ]
+                    ]
+                }
+            ]
+        }
+
+        return ["role": openAIRole(for: message.role), "content": message.content]
     }
+}
+
+private struct PendingToolCall {
+    var id: String?
+    var name: String?
+    var arguments: String = ""
+}
+
+private struct AnthropicBlock {
+    var type: String
+    var id: String?
+    var name: String?
+    var accumulated: String = ""
 }

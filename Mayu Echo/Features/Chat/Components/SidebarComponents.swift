@@ -444,27 +444,6 @@ struct SidebarItemRow: View {
     }
 }
 
-// MARK: - Empty Row
-
-struct EmptySidebarRow: View {
-    let title: String
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "tray")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.quaternary)
-
-            Text(title)
-                .font(.system(size: 12, weight: .regular))
-                .foregroundStyle(.quaternary)
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 9)
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
 // MARK: - Empty State (hero)
 
 struct SidebarEmptyState: View {

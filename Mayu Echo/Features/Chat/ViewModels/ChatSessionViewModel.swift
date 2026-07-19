@@ -2,13 +2,62 @@ import Foundation
 import Combine
 import SwiftData
 
+/// A model-proposed action (file edit or shell command) awaiting the user's decision.
+enum PendingToolProposal: Identifiable {
+    case edit(ProjectFileEditProposal)
+    case command(ProjectCommandProposal)
+
+    var id: UUID {
+        switch self {
+        case .edit(let proposal): return proposal.id
+        case .command(let proposal): return proposal.id
+        }
+    }
+
+    var toolCallID: String {
+        switch self {
+        case .edit(let proposal): return proposal.toolCallID
+        case .command(let proposal): return proposal.toolCallID
+        }
+    }
+}
+
+/// State captured while the agentic loop is paused waiting on the user to approve or
+/// reject one or more proposed actions.
+private struct PendingAgentTurn {
+    let assistantID: LLMMessage.ID
+    /// Original request messages plus the assistant's tool-call message and every
+    /// tool result resolved so far in this batch.
+    var baseMessages: [LLMMessage]
+    let model: LLMModel
+    let options: LLMGenerationOptions
+    let projectContext: ProjectAgentContext
+    let toolsEnabled: Bool
+    let iteration: Int
+    var proposals: [PendingToolProposal]
+}
+
 @MainActor
 final class ChatSessionViewModel: ObservableObject {
+    /// A file edit's content growing live as the model streams it, shown before the
+    /// tool call finishes and the real (accept/reject) proposal card appears.
+    struct LiveEditPreview: Identifiable {
+        let id = UUID()
+        let path: String?
+        let content: String
+    }
+
     @Published private(set) var messages: [LLMMessage] = []
     @Published private(set) var isGenerating = false
     @Published private(set) var availableModels: [LLMModel]
     @Published var selectedModel: LLMModel
     @Published var generationOptions = LLMGenerationOptions()
+    /// How autonomously proposed edits/commands are applied (Manual / Accept edits / Auto).
+    @Published var agentMode: AgentMode = .manual
+    /// File edits and shell commands proposed by the model that are awaiting approval.
+    @Published private(set) var pendingProposals: [PendingToolProposal] = []
+    /// The in-progress edit_file content, updated live as it streams in.
+    @Published private(set) var liveEditPreview: LiveEditPreview?
 
     private let engine: LocalAIEngineRouter
     private let downloader: HuggingFaceModelDownloader
@@ -16,12 +65,15 @@ final class ChatSessionViewModel: ObservableObject {
     private var includeProjectContext = true
     private var projectContextTokenBudget = LLMModel.defaultWorkingContextLength
     private var allowTerminalCommands = true
+    private var requireTerminalConfirmation = true
     private var streamTask: Task<Void, Never>?
     private var modelContext: ModelContext?
     private var activeItem: Item?
     private var activeItemID: PersistentIdentifier?
     private var persistedMessages: [LLMMessage.ID: ChatMessageRecord] = [:]
     private var currentAssistantMessageID: LLMMessage.ID?
+    private var pendingTurn: PendingAgentTurn?
+    private let maxToolLoopIterations = 8
 
     init(engine: LocalAIEngineRouter? = nil, downloader: HuggingFaceModelDownloader? = nil) {
         let resolvedDownloader = downloader ?? HuggingFaceModelDownloader()
@@ -83,6 +135,8 @@ final class ChatSessionViewModel: ObservableObject {
         )
     }
 
+    /// The `/terminal` and `$ ` manual prefixes — a separate, always-immediate path from
+    /// the model-invoked `run_terminal_command` tool below.
     private func runTerminalCommand(userPrompt: String, command: String) {
         let userMessage = LLMMessage(role: .user, content: userPrompt)
         let toolMessage = LLMMessage(
@@ -233,6 +287,12 @@ final class ChatSessionViewModel: ObservableObject {
         let projectPath = activeProjectPath
         let projectBookmarkData = activeProjectBookmarkData
         let contextTokenBudget = projectContextTokenBudget
+        let projectContext = projectPath.map {
+            ProjectAgentContext(rootPath: $0, bookmarkData: projectBookmarkData)
+        }
+        // Tool-calling is implemented for the API engine only (OpenAI- and
+        // Anthropic-compatible); local MLX/llama.cpp still get file-tree-only context.
+        let toolsEnabled = projectContext != nil && model.provider == .api
 
         streamTask?.cancel()
         streamTask = Task { [weak self] in
@@ -251,33 +311,23 @@ final class ChatSessionViewModel: ObservableObject {
                             bookmarkData: projectBookmarkData,
                             intelligence: options.intelligence,
                             modelContextLength: min(model.workingContextLength, contextTokenBudget),
-                            reservedResponseTokens: options.maxTokens
+                            reservedResponseTokens: options.maxTokens,
+                            toolsEnabled: toolsEnabled
                         )
                     }.value
                 } else {
                     requestMessages = chatMessages
                 }
 
-                let stream = await engine.streamChat(
-                    messages: requestMessages,
+                try await self.runAgenticTurn(
+                    requestMessages: requestMessages,
+                    assistantID: assistantID,
                     model: model,
-                    options: options
+                    options: options,
+                    toolsEnabled: toolsEnabled,
+                    projectContext: projectContext,
+                    iteration: 0
                 )
-
-                for try await event in stream {
-                    guard !Task.isCancelled else {
-                        return
-                    }
-
-                    switch event {
-                    case .token(let token):
-                        append(token, to: assistantID)
-                    case .completed:
-                        currentAssistantMessageID = nil
-                        saveContext()
-                        break
-                    }
-                }
             } catch {
                 guard !Task.isCancelled else {
                     return
@@ -291,14 +341,386 @@ final class ChatSessionViewModel: ObservableObject {
                 saveContext()
             }
 
-            isGenerating = false
+            // Stay "generating" while paused on an approval — the composer should not
+            // accept a new prompt mid-tool-call.
+            if pendingTurn == nil {
+                isGenerating = false
+            }
+
             saveContext()
         }
+    }
+
+    /// One assistant turn: stream a response, and if the model requests tools, execute
+    /// the safe ones automatically, pause for approval on file edits and (depending on
+    /// settings) commands, then recurse with the tool results appended until the model
+    /// returns a final answer or the loop cap is hit.
+    private func runAgenticTurn(
+        requestMessages: [LLMMessage],
+        assistantID: LLMMessage.ID,
+        model: LLMModel,
+        options: LLMGenerationOptions,
+        toolsEnabled: Bool,
+        projectContext: ProjectAgentContext?,
+        iteration: Int
+    ) async throws {
+        guard iteration < maxToolLoopIterations else {
+            replaceAssistantMessage(assistantID, with: "Stopped after too many tool calls in a row.")
+            currentAssistantMessageID = nil
+            saveContext()
+            return
+        }
+
+        let stream = await engine.streamChat(
+            messages: requestMessages,
+            model: model,
+            options: options,
+            toolsEnabled: toolsEnabled
+        )
+
+        var collectedToolCalls: [ToolCallRequest] = []
+
+        for try await event in stream {
+            guard !Task.isCancelled else {
+                return
+            }
+
+            switch event {
+            case .token(let token):
+                append(token, to: assistantID)
+            case .toolCallProgress(_, let name, let argumentsJSON):
+                updateLiveEditPreview(name: name, argumentsJSON: argumentsJSON)
+            case .toolCalls(let calls):
+                collectedToolCalls = calls
+            case .completed:
+                break
+            }
+        }
+
+        liveEditPreview = nil
+
+        guard !collectedToolCalls.isEmpty, let projectContext else {
+            currentAssistantMessageID = nil
+            saveContext()
+            return
+        }
+
+        setToolCalls(collectedToolCalls, on: assistantID)
+        saveContext()
+
+        var toolResultMessages: [LLMMessage] = []
+        var proposalsNeedingApproval: [PendingToolProposal] = []
+
+        for call in collectedToolCalls {
+            let result = ProjectAgentTools.execute(
+                name: call.name,
+                argumentsJSON: call.argumentsJSON,
+                toolCallID: call.id,
+                context: projectContext
+            )
+
+            switch result {
+            case .text(let text):
+                appendToolResult(text, callID: call.id, name: call.name, into: &toolResultMessages)
+
+            case .pendingEdit(let proposal):
+                // Accept-edits / Auto modes write the file without asking; Manual pauses.
+                if agentMode.autoApplyEdits {
+                    let editResult = applyEditWithRecovery(proposal, context: projectContext)
+                    appendEditToolResult(editResult, proposal: proposal, callID: call.id, name: call.name, into: &toolResultMessages)
+                } else {
+                    proposalsNeedingApproval.append(.edit(proposal))
+                }
+
+            case .pendingCommand(let proposal):
+                if !allowTerminalCommands {
+                    appendToolResult(
+                        "Terminal commands are disabled in Settings.",
+                        callID: call.id,
+                        name: call.name,
+                        into: &toolResultMessages
+                    )
+                } else if agentMode.autoRunCommands && !requireTerminalConfirmation {
+                    // Auto mode runs commands immediately, unless the safety setting forces a prompt.
+                    let commandResult = await terminalRunner.run(
+                        command: proposal.command,
+                        workingDirectoryPath: projectContext.rootPath,
+                        bookmarkData: projectContext.bookmarkData
+                    )
+                    appendToolResult(
+                        terminalResultContent(commandResult),
+                        callID: call.id,
+                        name: call.name,
+                        into: &toolResultMessages
+                    )
+                } else {
+                    proposalsNeedingApproval.append(.command(proposal))
+                }
+            }
+        }
+
+        saveContext()
+
+        let assistantSnapshot = assistantMessageSnapshot(assistantID)
+
+        if !proposalsNeedingApproval.isEmpty {
+            pendingTurn = PendingAgentTurn(
+                assistantID: assistantID,
+                baseMessages: requestMessages + [assistantSnapshot] + toolResultMessages,
+                model: model,
+                options: options,
+                projectContext: projectContext,
+                toolsEnabled: toolsEnabled,
+                iteration: iteration,
+                proposals: proposalsNeedingApproval
+            )
+            pendingProposals.append(contentsOf: proposalsNeedingApproval)
+            currentAssistantMessageID = nil
+            return
+        }
+
+        let nextAssistantMessage = LLMMessage(role: .assistant, content: "")
+        messages.append(nextAssistantMessage)
+        persist(nextAssistantMessage)
+        currentAssistantMessageID = nextAssistantMessage.id
+        saveContext()
+
+        try await runAgenticTurn(
+            requestMessages: requestMessages + [assistantSnapshot] + toolResultMessages,
+            assistantID: nextAssistantMessage.id,
+            model: model,
+            options: options,
+            toolsEnabled: toolsEnabled,
+            projectContext: projectContext,
+            iteration: iteration + 1
+        )
+    }
+
+    private func updateLiveEditPreview(name: String?, argumentsJSON: String) {
+        let contentKey: String
+
+        switch name {
+        case "edit_file": contentKey = "content"
+        case "str_replace": contentKey = "new_str"
+        default: return
+        }
+
+        let path = ProjectAgentTools.partialStringValue(forKey: "path", inPartialJSON: argumentsJSON)
+        let content = ProjectAgentTools.partialStringValue(forKey: contentKey, inPartialJSON: argumentsJSON) ?? ""
+        liveEditPreview = LiveEditPreview(path: path, content: content)
+    }
+
+    private func appendToolResult(_ text: String, callID: String, name: String, into results: inout [LLMMessage]) {
+        let toolMessage = LLMMessage(role: .tool, content: text, toolCallID: callID, toolName: name)
+        messages.append(toolMessage)
+        persist(toolMessage)
+        results.append(toolMessage)
+    }
+
+    /// Same as `appendToolResult`, but for a resolved edit: on success, attaches the
+    /// before/after content so the UI can offer a "Review" affordance after the fact.
+    private func appendEditToolResult(
+        _ text: String,
+        proposal: ProjectFileEditProposal,
+        callID: String,
+        name: String,
+        into results: inout [LLMMessage]
+    ) {
+        let succeeded = text == Self.editSuccessMessage
+        let toolMessage = LLMMessage(
+            role: .tool,
+            content: text,
+            toolCallID: callID,
+            toolName: name,
+            diffOriginalContent: succeeded ? proposal.originalContent : nil,
+            diffProposedContent: succeeded ? proposal.proposedContent : nil,
+            diffPath: succeeded ? proposal.path : nil
+        )
+        messages.append(toolMessage)
+        persist(toolMessage)
+        results.append(toolMessage)
+    }
+
+    private static let editSuccessMessage = "File written successfully."
+
+    /// Writes an approved edit. If the write is denied because the folder's stored bookmark
+    /// is read-only (created before the app had write access), re-requests folder access once
+    /// and retries with the fresh read-write bookmark.
+    private func applyEditWithRecovery(_ proposal: ProjectFileEditProposal, context: ProjectAgentContext) -> String {
+        let result = ProjectAgentTools.applyEdit(proposal, context: context)
+
+        guard case .permissionDenied = result else {
+            return result.message
+        }
+
+        guard let freshBookmark = ProjectFolderAccess.reauthorize(projectPath: context.rootPath) else {
+            return "The edit was not saved: Mayu Echo needs write access to this folder. Re-add the project folder in the sidebar to grant access, then try again."
+        }
+
+        persistRefreshedBookmark(freshBookmark, projectPath: context.rootPath)
+
+        let retryContext = ProjectAgentContext(rootPath: context.rootPath, bookmarkData: freshBookmark)
+        return ProjectAgentTools.applyEdit(proposal, context: retryContext).message
+    }
+
+    /// Stores a freshly minted read-write bookmark on every chat/project row that points at
+    /// this folder, so later edits (and future chats) use the read-write bookmark.
+    private func persistRefreshedBookmark(_ bookmark: Data, projectPath: String) {
+        activeItem?.projectBookmarkData = bookmark
+
+        if let modelContext {
+            let descriptor = FetchDescriptor<Item>()
+            if let items = try? modelContext.fetch(descriptor) {
+                for item in items where item.projectPath == projectPath || item.parentProjectPath == projectPath {
+                    item.projectBookmarkData = bookmark
+                }
+            }
+        }
+
+        saveContext()
+    }
+
+    /// Approves a proposed edit or command: applies it (writes the file, or runs the
+    /// command) and resumes the agentic loop once every proposal in the batch is decided.
+    func approve(_ proposal: PendingToolProposal) {
+        Task { await resolveProposal(proposal, approved: true) }
+    }
+
+    /// Rejects a proposed edit or command: nothing happens, and the model is told so.
+    func reject(_ proposal: PendingToolProposal) {
+        Task { await resolveProposal(proposal, approved: false) }
+    }
+
+    private func resolveProposal(_ proposal: PendingToolProposal, approved: Bool) async {
+        guard var turn = pendingTurn,
+              let proposalIndex = turn.proposals.firstIndex(where: { $0.id == proposal.id }) else {
+            return
+        }
+
+        turn.proposals.remove(at: proposalIndex)
+        pendingProposals.removeAll { $0.id == proposal.id }
+
+        let toolName: String
+        let resultText: String
+        var diffOriginalContent: String?
+        var diffProposedContent: String?
+        var diffPath: String?
+
+        switch proposal {
+        case .edit(let editProposal):
+            toolName = "edit_file"
+            if approved {
+                resultText = applyEditWithRecovery(editProposal, context: turn.projectContext)
+                if resultText == Self.editSuccessMessage {
+                    diffOriginalContent = editProposal.originalContent
+                    diffProposedContent = editProposal.proposedContent
+                    diffPath = editProposal.path
+                }
+            } else {
+                resultText = "The user rejected this change. The file was not modified."
+            }
+
+        case .command(let commandProposal):
+            toolName = "run_terminal_command"
+            if approved {
+                let commandResult = await terminalRunner.run(
+                    command: commandProposal.command,
+                    workingDirectoryPath: turn.projectContext.rootPath,
+                    bookmarkData: turn.projectContext.bookmarkData
+                )
+                resultText = terminalResultContent(commandResult)
+            } else {
+                resultText = "The user rejected running this command."
+            }
+        }
+
+        let toolMessage = LLMMessage(
+            role: .tool,
+            content: resultText,
+            toolCallID: proposal.toolCallID,
+            toolName: toolName,
+            diffOriginalContent: diffOriginalContent,
+            diffProposedContent: diffProposedContent,
+            diffPath: diffPath
+        )
+        messages.append(toolMessage)
+        persist(toolMessage)
+        turn.baseMessages.append(toolMessage)
+        saveContext()
+
+        guard turn.proposals.isEmpty else {
+            pendingTurn = turn
+            return
+        }
+
+        pendingTurn = nil
+        isGenerating = true
+
+        let nextAssistantMessage = LLMMessage(role: .assistant, content: "")
+        messages.append(nextAssistantMessage)
+        persist(nextAssistantMessage)
+        currentAssistantMessageID = nextAssistantMessage.id
+        saveContext()
+
+        let model = turn.model
+        let options = turn.options
+        let projectContext = turn.projectContext
+        let toolsEnabled = turn.toolsEnabled
+        let nextIteration = turn.iteration + 1
+        let baseMessages = turn.baseMessages
+
+        streamTask?.cancel()
+        streamTask = Task { [weak self] in
+            guard let self else {
+                return
+            }
+
+            do {
+                try await self.runAgenticTurn(
+                    requestMessages: baseMessages,
+                    assistantID: nextAssistantMessage.id,
+                    model: model,
+                    options: options,
+                    toolsEnabled: toolsEnabled,
+                    projectContext: projectContext,
+                    iteration: nextIteration
+                )
+            } catch {
+                guard !Task.isCancelled else {
+                    return
+                }
+
+                self.replaceAssistantMessage(nextAssistantMessage.id, with: error.localizedDescription)
+                self.currentAssistantMessageID = nil
+            }
+
+            if self.pendingTurn == nil {
+                self.isGenerating = false
+            }
+
+            self.saveContext()
+        }
+    }
+
+    private func setToolCalls(_ toolCalls: [ToolCallRequest], on messageID: LLMMessage.ID) {
+        guard let index = messages.firstIndex(where: { $0.id == messageID }) else {
+            return
+        }
+
+        messages[index].toolCalls = toolCalls
+        persistedMessages[messageID]?.update(from: messages[index])
+    }
+
+    private func assistantMessageSnapshot(_ id: LLMMessage.ID) -> LLMMessage {
+        messages.first { $0.id == id } ?? LLMMessage(role: .assistant, content: "")
     }
 
     func cancel() {
         streamTask?.cancel()
         streamTask = nil
+        pendingTurn = nil
+        pendingProposals = []
+        liveEditPreview = nil
 
         Task {
             await engine.cancel()
@@ -354,6 +776,8 @@ final class ChatSessionViewModel: ObservableObject {
         includeProjectContext = settings.includeProjectContext
         projectContextTokenBudget = settings.contextTokenBudget
         allowTerminalCommands = settings.allowTerminalCommands
+        requireTerminalConfirmation = settings.requireTerminalConfirmation
+        agentMode = settings.agentMode
 
         if let model = settings.selectedModel(in: availableModels) {
             selectedModel = model

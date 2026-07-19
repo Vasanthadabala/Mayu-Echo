@@ -1,4 +1,4 @@
-//
+    //
 //  Mayu_EchoApp.swift
 //  Mayu Echo
 //
@@ -33,5 +33,9 @@ struct Mayu_EchoApp: App {
                 .preferredColorScheme(appSettings.colorScheme.swiftUIColorScheme)
         }
         .modelContainer(sharedModelContainer)
+        // Without a trailing toolbar item, macOS's unified toolbar can expand into its
+        // "large title" layout and reserve extra height even with an empty title — pin
+        // to the compact style so the toolbar stays a single slim row.
+        .windowToolbarStyle(.unifiedCompact)
     }
 }

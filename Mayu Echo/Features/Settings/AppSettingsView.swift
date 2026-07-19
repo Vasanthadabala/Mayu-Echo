@@ -269,11 +269,11 @@ struct AppSettingsView: View {
                     HStack(spacing: 10) {
                         ZStack {
                             RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                .fill(Color.teal.opacity(0.15))
+                                .fill(Color.mayuAccent.opacity(0.15))
                                 .frame(width: 28, height: 28)
                             Image(systemName: "globe.americas.fill")
                                 .font(.system(size: 13, weight: .medium))
-                                .foregroundStyle(Color.teal)
+                                .foregroundStyle(Color.mayuAccent)
                         }
 
                         VStack(alignment: .leading, spacing: 1) {
@@ -298,7 +298,7 @@ struct AppSettingsView: View {
                             .fill(Color.mayuPanelBackground)
                             .overlay {
                                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                    .stroke(Color.teal.opacity(0.25), lineWidth: 1)
+                                    .stroke(Color.mayuAccent.opacity(0.25), lineWidth: 1)
                             }
                     }
                 }

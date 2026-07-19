@@ -38,6 +38,7 @@ final class AppSettings: ObservableObject {
         static let includeGitChanges = "mayu.settings.includeGitChanges.v1"
         static let allowTerminalCommands = "mayu.settings.allowTerminalCommands.v1"
         static let requireTerminalConfirmation = "mayu.settings.requireTerminalConfirmation.v1"
+        static let agentMode = "mayu.settings.agentMode.v1"
         static let reduceLocalLogging = "mayu.settings.reduceLocalLogging.v1"
         static let colorScheme = "mayu.settings.colorScheme.v1"
     }
@@ -120,6 +121,13 @@ final class AppSettings: ObservableObject {
         }
     }
 
+    /// How autonomously the agent applies file edits and runs terminal commands.
+    @Published var agentMode: AgentMode {
+        didSet {
+            UserDefaults.standard.set(agentMode.rawValue, forKey: Key.agentMode)
+        }
+    }
+
     @Published var colorScheme: AppColorScheme {
         didSet {
             UserDefaults.standard.set(colorScheme.rawValue, forKey: Key.colorScheme)
@@ -153,6 +161,7 @@ final class AppSettings: ObservableObject {
         allowTerminalCommands = defaults.object(forKey: Key.allowTerminalCommands) as? Bool ?? true
         requireTerminalConfirmation = defaults.object(forKey: Key.requireTerminalConfirmation) as? Bool ?? true
         reduceLocalLogging = defaults.object(forKey: Key.reduceLocalLogging) as? Bool ?? true
+        agentMode = defaults.string(forKey: Key.agentMode).flatMap(AgentMode.init(rawValue:)) ?? .manual
         colorScheme = defaults.string(forKey: Key.colorScheme).flatMap(AppColorScheme.init(rawValue:)) ?? .system
     }
 

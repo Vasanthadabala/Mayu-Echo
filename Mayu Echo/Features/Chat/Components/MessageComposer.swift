@@ -6,6 +6,7 @@ struct MessageComposer: View {
     @Binding var selectedModel: LLMModel
     let availableModels: [LLMModel]
     @Binding var generationOptions: LLMGenerationOptions
+    @Binding var agentMode: AgentMode
     let contextUsage: ContextWindowUsage
     let isGenerating: Bool
     let sendMessage: () -> Void
@@ -60,19 +61,23 @@ struct MessageComposer: View {
                 .help("Add action")
 
                 Menu {
-                    Button("Default permissions", action: {})
+                    Text("Mode")
+
+                    ForEach(AgentMode.allCases) { mode in
+                        AgentModeMenuButton(mode: mode, selection: $agentMode)
+                    }
                 } label: {
                     Label {
                         HStack(spacing: 6) {
-                            Text("Default permissions")
+                            Text(agentMode.title)
                             Image(systemName: "chevron.down")
                                 .font(.system(size: 11, weight: .semibold))
                         }
                     } icon: {
-                        Image(systemName: "hand.raised")
+                        Image(systemName: agentMode.iconName)
                     }
                     .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(agentMode == .manual ? .secondary : Color.mayuAccent)
                     .padding(.horizontal, 11)
                     .padding(.vertical, 7)
                     .background {
@@ -86,6 +91,7 @@ struct MessageComposer: View {
                 }
                 .menuStyle(.borderlessButton)
                 .buttonStyle(.plain)
+                .help(agentMode.subtitle)
 
                 Spacer()
 
@@ -422,6 +428,23 @@ private struct ModelMenuButton: View {
                 Label(model.displayName, systemImage: "checkmark")
             } else {
                 Text(model.displayName)
+            }
+        }
+    }
+}
+
+private struct AgentModeMenuButton: View {
+    let mode: AgentMode
+    @Binding var selection: AgentMode
+
+    var body: some View {
+        Button {
+            selection = mode
+        } label: {
+            if selection == mode {
+                Label(mode.title, systemImage: "checkmark")
+            } else {
+                Text(mode.title)
             }
         }
     }

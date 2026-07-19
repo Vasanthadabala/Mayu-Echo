@@ -480,8 +480,8 @@ struct ProjectChangesSummaryBar: View {
 struct ProjectChangesReviewPanel: View {
     let snapshot: ProjectChangesSnapshot
     let isLoading: Bool
-    @Binding var isVisible: Bool
     let refresh: () -> Void
+    let close: () -> Void
     @State private var expandedFileIDs: Set<String> = []
 
     var body: some View {
@@ -567,9 +567,7 @@ struct ProjectChangesReviewPanel: View {
             }
             .buttonStyle(.plain)
 
-            Button {
-                isVisible = false
-            } label: {
+            Button(action: close) {
                 Image(systemName: "sidebar.right")
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(.primary)

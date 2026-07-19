@@ -53,12 +53,14 @@ actor LocalAIEngineRouter: LLMEngine {
     func streamChat(
         messages: [LLMMessage],
         model: LLMModel,
-        options: LLMGenerationOptions
+        options: LLMGenerationOptions,
+        toolsEnabled: Bool
     ) async -> AsyncThrowingStream<LLMStreamEvent, Error> {
         await engine(for: model.provider).streamChat(
             messages: messages,
             model: model,
-            options: options
+            options: options,
+            toolsEnabled: toolsEnabled
         )
     }
 

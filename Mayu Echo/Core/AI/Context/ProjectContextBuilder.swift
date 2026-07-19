@@ -23,7 +23,8 @@ nonisolated struct ProjectContextBuilder {
         intelligence: LLMGenerationOptions.Intelligence = .medium,
         modelContextLength: Int = 0,
         reservedResponseTokens: Int? = nil,
-        chatMessages: [LLMMessage] = []
+        chatMessages: [LLMMessage] = [],
+        toolsEnabled: Bool = false
     ) -> LLMMessage? {
         guard let projectPath else {
             return nil
@@ -66,17 +67,46 @@ nonisolated struct ProjectContextBuilder {
             )
         }
 
-        let header = """
-        You are Mayu Echo, a local coding assistant.
-        The user is currently chatting inside the selected project folder:
-        \(projectPath)
+        let header: String
 
-        Treat phrases like "this project", "this folder", "here", and "current directory" as referring to that selected folder.
-        When the user asks what files are present, answer from the project file tree below instead of asking which directory they mean.
-        If the question requires file contents that are not included here, say which file you need to inspect.
-        Response mode: \(intelligence.rawValue).
-        \(responseModeInstruction(for: intelligence))
-        """
+        if toolsEnabled {
+            header = """
+            You are Mayu Echo, an agentic coding assistant with direct, tool-based access to the user's project files:
+            \(projectPath)
+
+            Treat phrases like "this project", "this folder", "here", and "current directory" as referring to that folder.
+
+            You have these tools and you are expected to USE them, not just talk about them:
+            - read_file(path): read the full contents of a file. Call this before editing so you edit the real, current content.
+            - list_directory(path): list a folder's contents (empty string = project root).
+            - str_replace(path, old_str, new_str): make a targeted edit by replacing one exact, unique snippet. This is your PRIMARY editing tool — use it for almost every change.
+            - edit_file(path, content): replace a file's ENTIRE contents. Use only to create a new file or when rewriting most of a file.
+            - run_terminal_command(command): run a shell command in the project root.
+
+            When the user asks you to change, add, fix, rename, refactor, or implement something in this project, DO IT:
+            1. Use list_directory / read_file to find and read the relevant file(s).
+            2. Prefer str_replace to change only the lines that need changing — do NOT rewrite the whole file for a small edit. 'old_str' must match the file exactly (whitespace included) and be unique; add a little surrounding context if needed. Only use edit_file for brand-new files or near-total rewrites.
+            Do NOT respond with generic guidance, hypothetical snippets, or "find something like ... and change it to ..." — that is a failure. The user cannot apply changes by hand; you must perform the edit. Never guess file contents — read the file first.
+
+            Only answer in prose (without tools) when the user is asking a general question that is not a change to this project. Use the project file tree below to locate files.
+            \(languageInstruction)
+            Response mode: \(intelligence.rawValue).
+            \(responseModeInstruction(for: intelligence))
+            """
+        } else {
+            header = """
+            You are Mayu Echo, a local coding assistant.
+            The user is currently chatting inside the selected project folder:
+            \(projectPath)
+
+            Treat phrases like "this project", "this folder", "here", and "current directory" as referring to that selected folder.
+            When the user asks what files are present, answer from the project file tree below instead of asking which directory they mean.
+            If the question requires file contents that are not included here, say which file you need to inspect.
+            \(languageInstruction)
+            Response mode: \(intelligence.rawValue).
+            \(responseModeInstruction(for: intelligence))
+            """
+        }
 
         let treeContent = tree.lines.joined(separator: "\n")
         let availableTreeCharacters = max(
@@ -103,7 +133,8 @@ nonisolated struct ProjectContextBuilder {
         bookmarkData: Data?,
         intelligence: LLMGenerationOptions.Intelligence = .medium,
         modelContextLength: Int = 0,
-        reservedResponseTokens: Int? = nil
+        reservedResponseTokens: Int? = nil,
+        toolsEnabled: Bool = false
     ) -> [LLMMessage] {
         guard let projectContextMessage = makeSystemMessage(
             projectPath: projectPath,
@@ -111,13 +142,29 @@ nonisolated struct ProjectContextBuilder {
             intelligence: intelligence,
             modelContextLength: modelContextLength,
             reservedResponseTokens: reservedResponseTokens,
-            chatMessages: chatMessages
+            chatMessages: chatMessages,
+            toolsEnabled: toolsEnabled
         ) else {
-            return chatMessages
+            // Plain (non-project) chat: still send a minimal base system prompt so the
+            // model has a stable identity and, importantly, replies in the user's language.
+            // Without it, some models (e.g. Chinese-first models like Hunyuan) default to
+            // their own language for self-referential questions.
+            return [LLMMessage(role: .system, content: baseSystemInstruction)] + chatMessages
         }
 
         return [projectContextMessage] + chatMessages
     }
+
+    /// Identity + language directive sent when there is no project context. Kept short so
+    /// it barely costs tokens.
+    static let baseSystemInstruction = """
+    You are Mayu Echo, a helpful AI assistant.
+    Always reply in the same language the user writes in — if the user writes in English, respond in English. Only switch languages if the user does.
+    """
+
+    /// One-line language directive folded into the project system prompt.
+    private static let languageInstruction =
+        "Always reply in the same language the user writes in; only switch languages if the user does."
 
     private static func resolvedProjectURL(projectPath: String, bookmarkData: Data?) -> URL {
         guard let bookmarkData else {

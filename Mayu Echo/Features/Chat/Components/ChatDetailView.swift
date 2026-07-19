@@ -2,6 +2,15 @@ import SwiftUI
 import AppKit
 import SwiftData
 
+/// What the right-hand panel shows, if anything. A single piece of state (rather than an
+/// `isVisible` bool plus a separate "reviewed edit" optional) so there is exactly one
+/// close/toggle affordance in existence at a time, not two independent ones.
+private enum RightPanelContent: Equatable {
+    case none
+    case projectChanges
+    case editReview(LLMMessage)
+}
+
 struct ChatDetailView: View {
     private static let scrollCoordinateSpace = "chat-detail-scroll"
     private static let bottomAnchorID = "chat-detail-bottom-anchor"
@@ -15,7 +24,7 @@ struct ChatDetailView: View {
     @State private var isAtLatestMessage = true
     @State private var editingPromptID: LLMMessage.ID?
     @State private var editingPromptDraft = ""
-    @State private var isRightPanelVisible = false
+    @State private var rightPanelContent: RightPanelContent = .none
     @State private var lastProjectChangeCount = 0
     @StateObject private var projectChanges = ProjectChangesViewModel()
 
@@ -24,16 +33,28 @@ struct ChatDetailView: View {
             HStack(spacing: 0) {
                 chatColumn
 
-                if isRightPanelVisible {
+                if rightPanelContent != .none {
                     Divider()
                         .background(Color.mayuBorder)
 
-                    ProjectChangesReviewPanel(
-                        snapshot: projectChanges.snapshot,
-                        isLoading: projectChanges.isLoading,
-                        isVisible: $isRightPanelVisible,
-                        refresh: projectChanges.refresh
-                    )
+                    Group {
+                        switch rightPanelContent {
+                        case .editReview(let message):
+                            EditDiffReviewPanel(
+                                path: message.diffPath,
+                                originalContent: message.diffOriginalContent,
+                                proposedContent: message.diffProposedContent ?? "",
+                                close: { rightPanelContent = .none }
+                            )
+                        case .projectChanges, .none:
+                            ProjectChangesReviewPanel(
+                                snapshot: projectChanges.snapshot,
+                                isLoading: projectChanges.isLoading,
+                                refresh: projectChanges.refresh,
+                                close: { rightPanelContent = .none }
+                            )
+                        }
+                    }
                         .frame(width: rightPanelWidth(for: proxy.size.width))
                         .transition(.move(edge: .trailing).combined(with: .opacity))
                 }
@@ -46,8 +67,13 @@ struct ChatDetailView: View {
                 chatTitleControl
             }
 
+            // An invisible placeholder — without *any* trailing/primaryAction toolbar
+            // content, macOS reserves its taller "large title" band above the content
+            // even with an empty title, which is what left the dead space above the
+            // right panel. This keeps the toolbar pinned to a single compact row without
+            // showing a visible (and previously duplicated) icon.
             ToolbarItem(placement: .primaryAction) {
-                splitViewControl
+                Color.clear.frame(width: 1, height: 1)
             }
         }
         .onAppear {
@@ -63,6 +89,7 @@ struct ChatDetailView: View {
             viewModel.apply(settings: appSettings)
             projectChanges.configure(projectPath: activeProjectPath)
             lastProjectChangeCount = projectChanges.snapshot.changeCount
+            rightPanelContent = .none
         }
         .onChange(of: appSettingsSignature) {
             viewModel.apply(settings: appSettings)
@@ -86,10 +113,13 @@ struct ChatDetailView: View {
         .onChange(of: viewModel.generationOptions) {
             appSettings.generationOptions = viewModel.generationOptions
         }
+        .onChange(of: viewModel.agentMode) {
+            appSettings.agentMode = viewModel.agentMode
+        }
         .onChange(of: projectChanges.snapshot.changeCount) {
             handleProjectChangeCount()
         }
-        .animation(.easeInOut(duration: 0.18), value: isRightPanelVisible)
+        .animation(.easeInOut(duration: 0.18), value: rightPanelContent)
     }
 
     private func sendMessage() {
@@ -107,8 +137,8 @@ struct ChatDetailView: View {
     private func handleProjectChangeCount() {
         let changeCount = projectChanges.snapshot.changeCount
 
-        if lastProjectChangeCount == 0 && changeCount > 0 {
-            isRightPanelVisible = true
+        if lastProjectChangeCount == 0 && changeCount > 0, rightPanelContent == .none {
+            rightPanelContent = .projectChanges
         }
 
         lastProjectChangeCount = changeCount
@@ -149,28 +179,50 @@ struct ChatDetailView: View {
         }
     }
 
-    private var splitViewControl: some View {
-        Button {
-            isRightPanelVisible.toggle()
-        } label: {
-            Image(systemName: "sidebar.right")
-                .font(.system(size: 16, weight: .medium))
-                .foregroundStyle(isRightPanelVisible ? .primary : .secondary)
-                .frame(width: 36, height: 28)
-                .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-    }
-
     private var chatColumn: some View {
         VStack(spacing: 0) {
             chatSurface
+
+            if let liveEditPreview = viewModel.liveEditPreview {
+                LiveEditPreviewCard(preview: liveEditPreview)
+                    .frame(maxWidth: 980)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.horizontal, 34)
+                    .padding(.bottom, 10)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+
+            if !viewModel.pendingProposals.isEmpty {
+                VStack(spacing: 10) {
+                    ForEach(viewModel.pendingProposals) { proposal in
+                        switch proposal {
+                        case .edit(let editProposal):
+                            FileEditProposalCard(
+                                proposal: editProposal,
+                                approve: { viewModel.approve(proposal) },
+                                reject: { viewModel.reject(proposal) }
+                            )
+                        case .command(let commandProposal):
+                            CommandProposalCard(
+                                proposal: commandProposal,
+                                approve: { viewModel.approve(proposal) },
+                                reject: { viewModel.reject(proposal) }
+                            )
+                        }
+                    }
+                }
+                .frame(maxWidth: 980)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.horizontal, 34)
+                .padding(.bottom, 10)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
 
             if projectChanges.snapshot.hasChanges {
                 ProjectChangesSummaryBar(
                     snapshot: projectChanges.snapshot,
                     reviewAction: {
-                        isRightPanelVisible = true
+                        rightPanelContent = .projectChanges
                     }
                 )
                 .frame(maxWidth: 980)
@@ -185,6 +237,7 @@ struct ChatDetailView: View {
                 selectedModel: $viewModel.selectedModel,
                 availableModels: viewModel.availableModels,
                 generationOptions: $viewModel.generationOptions,
+                agentMode: $viewModel.agentMode,
                 contextUsage: contextUsage,
                 isGenerating: viewModel.isGenerating,
                 sendMessage: sendMessage,
@@ -220,12 +273,14 @@ struct ChatDetailView: View {
                             ForEach(viewModel.messages) { message in
                                 ChatMessageBubble(
                                     message: message,
+                                    resolvedToolCallIDs: resolvedToolCallIDs,
                                     canEditPrompt: message.id == latestUserMessageID,
                                     isEditingPrompt: message.id == editingPromptID,
                                     editingPromptDraft: $editingPromptDraft,
                                     beginEditingPrompt: beginEditingPrompt,
                                     savePromptEdit: savePromptEdit,
-                                    cancelPromptEdit: cancelPromptEdit
+                                    cancelPromptEdit: cancelPromptEdit,
+                                    openEditReview: { rightPanelContent = .editReview($0) }
                                 )
                             }
 
@@ -348,6 +403,13 @@ struct ChatDetailView: View {
         }?.id
     }
 
+    /// Tool-call IDs that already have a `.tool` result in the transcript. An assistant
+    /// message's `ToolCallingIndicator` for one of these IDs is stale (the call finished
+    /// turns ago) and should not keep showing a spinner.
+    private var resolvedToolCallIDs: Set<String> {
+        Set(viewModel.messages.compactMap { $0.role == .tool ? $0.toolCallID : nil })
+    }
+
     private var contextUsage: ContextWindowUsage {
         let usedTokens = (viewModel.messages.map(\.content) + [message]).reduce(0) { partialResult, content in
             partialResult + estimatedTokenCount(in: content)
@@ -365,7 +427,9 @@ struct ChatDetailView: View {
             appSettings.selectedModelID ?? "",
             "\(appSettings.includeProjectContext)",
             "\(appSettings.contextTokenBudget)",
-            "\(appSettings.allowTerminalCommands)"
+            "\(appSettings.allowTerminalCommands)",
+            "\(appSettings.requireTerminalConfirmation)",
+            appSettings.agentMode.rawValue
         ].joined(separator: "|")
     }
 
@@ -408,21 +472,39 @@ struct ChatDetailView: View {
 
 private struct ChatMessageBubble: View {
     let message: LLMMessage
+    let resolvedToolCallIDs: Set<String>
     let canEditPrompt: Bool
     let isEditingPrompt: Bool
     @Binding var editingPromptDraft: String
     let beginEditingPrompt: (LLMMessage) -> Void
     let savePromptEdit: () -> Void
     let cancelPromptEdit: () -> Void
+    let openEditReview: (LLMMessage) -> Void
     @State private var isCopied = false
 
     var body: some View {
         if isUserMessage {
             userPrompt
             .frame(maxWidth: .infinity, alignment: .trailing)
+        } else if message.role == .tool && message.toolName != nil {
+            ToolActivityRow(message: message, openReview: { openEditReview(message) })
+        } else if isStaleToolCallPlaceholder {
+            // Every call this message requested already has a result further down the
+            // transcript (as a ToolActivityRow) — nothing left to show here.
+            EmptyView()
         } else {
             assistantMessage
         }
+    }
+
+    /// True once every tool call this (empty-content) assistant message requested has
+    /// resolved — the message is now pure history with nothing left to render.
+    private var isStaleToolCallPlaceholder: Bool {
+        guard let toolCalls = message.toolCalls, !toolCalls.isEmpty, message.content.isEmpty else {
+            return false
+        }
+
+        return toolCalls.allSatisfy { resolvedToolCallIDs.contains($0.id) }
     }
 
     private var userPrompt: some View {
@@ -457,8 +539,12 @@ private struct ChatMessageBubble: View {
                     .buttonStyle(.plain)
                     .help("Save edit")
                 } else {
+                    Text(formattedTimestamp)
+                        .font(.system(size: 12, weight: .regular))
+                        .foregroundStyle(.secondary)
+
                     Button(action: copyPrompt) {
-                        Image(systemName: isCopied ? "checkmark" : "doc.on.doc")
+                        Image(systemName: isCopied ? "checkmark" : "square.on.square")
                             .font(.system(size: 14, weight: .medium))
                             .frame(width: 24, height: 24)
                             .contentShape(Rectangle())
@@ -506,24 +592,17 @@ private struct ChatMessageBubble: View {
     }
 
     private var assistantMessage: some View {
-        HStack(alignment: .top, spacing: 12) {
-            // Avatar chip
-            ZStack {
-                Circle()
-                    .fill(Color.mayuAccentSoft)
-                    .overlay {
-                        Circle()
-                            .stroke(Color.mayuBorder.opacity(0.5), lineWidth: 1)
-                    }
+        VStack(alignment: .leading, spacing: 14) {
+            if let toolCalls = message.toolCalls, !toolCalls.isEmpty, message.content.isEmpty {
+                // Only calls that haven't resolved yet get a spinner — a call with a
+                // matching .tool result later in the transcript is stale history, not
+                // still in progress, and would otherwise spin forever.
+                let pendingCalls = toolCalls.filter { !resolvedToolCallIDs.contains($0.id) }
 
-                Image(systemName: "sparkles")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Color.mayuAccent)
-            }
-            .frame(width: 28, height: 28)
-            .padding(.top, 1)
-
-            VStack(alignment: .leading, spacing: 14) {
+                ForEach(pendingCalls) { call in
+                    ToolCallingIndicator(call: call)
+                }
+            } else {
                 ForEach(ChatMessageSegment.parse(displayContent)) { segment in
                     switch segment {
                     case .prose(_, let text):
@@ -533,8 +612,8 @@ private struct ChatMessageBubble: View {
                     }
                 }
             }
-            .frame(maxWidth: 720, alignment: .leading)
         }
+        .frame(maxWidth: 720, alignment: .leading)
         .padding(.trailing, 60)
     }
 
@@ -555,6 +634,118 @@ private struct ChatMessageBubble: View {
             isCopied = false
         }
     }
+
+    private static let timestampFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "d MMM, H:mm"
+        return formatter
+    }()
+
+    private var formattedTimestamp: String {
+        Self.timestampFormatter.string(from: message.createdAt)
+    }
+}
+
+/// Compact row for an auto-executed tool result (read_file / list_directory / a
+/// resolved edit_file) — shown instead of dumping the raw tool output into the
+/// transcript as if the assistant had written it. Edits carry their before/after content,
+/// so the row offers a "Review" affordance that opens the diff in the right-hand panel.
+private struct ToolActivityRow: View {
+    let message: LLMMessage
+    let openReview: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ZStack {
+                Circle().fill(Color.mayuAccentSoft)
+                Image(systemName: iconName)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(isRejected ? Color.mayuWarning : Color.mayuAccent)
+            }
+            .frame(width: 22, height: 22)
+
+            Text(summary)
+                .font(.system(size: 12.5, weight: .medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+
+            if isReviewable {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.leading, 4)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            guard isReviewable else {
+                return
+            }
+
+            openReview()
+        }
+        .help(isReviewable ? "Review this change" : "")
+    }
+
+    private var isReviewable: Bool {
+        message.diffProposedContent != nil
+    }
+
+    private var isRejected: Bool {
+        (message.toolName == "edit_file" || message.toolName == "str_replace" || message.toolName == "run_terminal_command")
+            && message.content.localizedCaseInsensitiveContains("rejected")
+    }
+
+    private var iconName: String {
+        switch message.toolName {
+        case "read_file": return "doc.text.magnifyingglass"
+        case "list_directory": return "folder"
+        case "edit_file", "str_replace": return isRejected ? "xmark.circle" : "checkmark.circle"
+        case "run_terminal_command": return isRejected ? "xmark.circle" : "terminal"
+        default: return "wrench.and.screwdriver"
+        }
+    }
+
+    private var summary: String {
+        switch message.toolName {
+        case "read_file": return "Read a file"
+        case "list_directory": return "Listed a directory"
+        case "edit_file", "str_replace": return isRejected ? "Edit rejected" : "File edited"
+        case "run_terminal_command": return isRejected ? "Command rejected" : "Ran a command"
+        default: return message.toolName ?? "Tool result"
+        }
+    }
+}
+
+/// Shown in place of an empty assistant bubble while the model has requested a tool
+/// call but the result hasn't come back yet.
+private struct ToolCallingIndicator: View {
+    let call: ToolCallRequest
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ProgressView()
+                .controlSize(.small)
+                .scaleEffect(0.7)
+
+            Text(label)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var label: String {
+        switch call.name {
+        case "read_file": return "Reading a file…"
+        case "list_directory": return "Listing a directory…"
+        case "edit_file", "str_replace": return "Proposing a file edit…"
+        case "run_terminal_command": return "Proposing a terminal command…"
+        default: return "Calling \(call.name)…"
+        }
+    }
 }
 
 private struct EmptyChatState: View {
@@ -564,19 +755,19 @@ private struct EmptyChatState: View {
     private let suggestions: [(icon: String, title: String, subtitle: String, tint: Color)] = [
         (
             "terminal", "Run a command", "Execute shell commands in your project",
-            Color(red: 0.757, green: 0.376, blue: 0.239)
+            Color.primary
         ),
         (
             "doc.text.magnifyingglass", "Review changes", "Inspect recent git diffs",
-            Color(red: 0.267, green: 0.498, blue: 0.220)
+            Color.primary
         ),
         (
             "lightbulb", "Ask anything", "Explain code, suggest refactors",
-            Color(red: 0.749, green: 0.573, blue: 0.157)
+            Color.primary
         ),
         (
             "arrow.triangle.2.circlepath", "Iterate", "Edit and regenerate responses",
-            Color(red: 0.522, green: 0.400, blue: 0.573)
+            Color.primary
         )
     ]
 
@@ -738,6 +929,8 @@ private struct AssistantProseView: View {
                     AssistantBullet(text: element.text)
                 case .numbered(let number):
                     AssistantNumberedStep(number: number, text: element.text)
+                case .table(let table):
+                    AssistantTableView(table: table)
                 case .paragraph:
                     Text(element.text)
                         .font(.system(size: 15, weight: .regular))
@@ -749,6 +942,54 @@ private struct AssistantProseView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct AssistantTableView: View {
+    let table: MarkdownTable
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            Grid(alignment: .topLeading, horizontalSpacing: 0, verticalSpacing: 0) {
+                GridRow {
+                    ForEach(Array(table.headers.enumerated()), id: \.offset) { _, cell in
+                        cellView(cell, isHeader: true)
+                    }
+                }
+
+                ForEach(Array(table.rows.enumerated()), id: \.offset) { _, row in
+                    GridRow {
+                        ForEach(Array(row.enumerated()), id: \.offset) { _, cell in
+                            cellView(cell, isHeader: false)
+                        }
+                    }
+                }
+            }
+            .background(Color.mayuCodeBackground)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(Color.mayuBorder.opacity(0.6), lineWidth: 1)
+            }
+        }
+        .frame(maxWidth: 720, alignment: .leading)
+    }
+
+    private func cellView(_ text: String, isHeader: Bool) -> some View {
+        Text(text.isEmpty ? " " : text)
+            .font(.system(size: 13, weight: isHeader ? .semibold : .regular))
+            .foregroundStyle(isHeader ? Color.primary : Color.primary.opacity(0.85))
+            .textSelection(.enabled)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .frame(minWidth: 90, maxWidth: 280, alignment: .leading)
+            .frame(maxHeight: .infinity, alignment: .topLeading)
+            .background(isHeader ? Color.mayuElevatedBackground.opacity(0.6) : Color.clear)
+            .overlay {
+                Rectangle()
+                    .stroke(Color.mayuBorder.opacity(0.4), lineWidth: 0.5)
+            }
     }
 }
 
@@ -818,12 +1059,18 @@ private struct AssistantNumberedStep: View {
     }
 }
 
+private struct MarkdownTable: Equatable {
+    let headers: [String]
+    let rows: [[String]]
+}
+
 private struct AssistantProseElement: Identifiable {
     enum Kind {
         case heading
         case bullet
         case numbered(Int)
         case paragraph
+        case table(MarkdownTable)
     }
 
     let id = UUID()
@@ -848,11 +1095,43 @@ private struct AssistantProseElement: Identifiable {
             elements.append(AssistantProseElement(kind: .paragraph, text: cleanInlineMarkdown(paragraph)))
         }
 
-        for rawLine in text.components(separatedBy: .newlines) {
-            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lines = text.components(separatedBy: .newlines)
+        var index = 0
+
+        while index < lines.count {
+            let line = lines[index].trimmingCharacters(in: .whitespacesAndNewlines)
 
             guard !line.isEmpty else {
                 flushParagraph()
+                index += 1
+                continue
+            }
+
+            // A GFM table: a header row with pipes immediately followed by a separator row
+            // (e.g. |---|---|). Consume the header, separator, and all following data rows.
+            if isTableRow(line), index + 1 < lines.count, isTableSeparator(lines[index + 1]) {
+                flushParagraph()
+
+                let headers = parseTableCells(line).map(cleanInlineMarkdown)
+                var rows: [[String]] = []
+                var cursor = index + 2
+
+                while cursor < lines.count {
+                    let rowLine = lines[cursor].trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !rowLine.isEmpty, isTableRow(rowLine) else {
+                        break
+                    }
+
+                    let cells = normalizedRow(parseTableCells(rowLine), columnCount: headers.count)
+                    rows.append(cells.map(cleanInlineMarkdown))
+                    cursor += 1
+                }
+
+                elements.append(AssistantProseElement(
+                    kind: .table(MarkdownTable(headers: headers, rows: rows)),
+                    text: ""
+                ))
+                index = cursor
                 continue
             }
 
@@ -868,6 +1147,8 @@ private struct AssistantProseElement: Identifiable {
             } else {
                 paragraphLines.append(line)
             }
+
+            index += 1
         }
 
         flushParagraph()
@@ -926,6 +1207,47 @@ private struct AssistantProseElement: Identifiable {
             .replacingOccurrences(of: "__", with: "")
             .replacingOccurrences(of: "`", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func isTableRow(_ line: String) -> Bool {
+        line.contains("|")
+    }
+
+    /// A separator row is the `|---|:--:|` line under a table header: only pipes, dashes,
+    /// colons, and spaces, with at least one dash.
+    private static func isTableSeparator(_ rawLine: String) -> Bool {
+        let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard line.contains("-"), line.contains("|") else {
+            return false
+        }
+
+        let allowed = Set("|-: ")
+        return line.allSatisfy { allowed.contains($0) }
+    }
+
+    private static func parseTableCells(_ rawLine: String) -> [String] {
+        var line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if line.hasPrefix("|") {
+            line.removeFirst()
+        }
+        if line.hasSuffix("|") {
+            line.removeLast()
+        }
+
+        return line.components(separatedBy: "|").map {
+            $0.trimmingCharacters(in: .whitespaces)
+        }
+    }
+
+    private static func normalizedRow(_ cells: [String], columnCount: Int) -> [String] {
+        if cells.count == columnCount {
+            return cells
+        }
+        if cells.count > columnCount {
+            return Array(cells.prefix(columnCount))
+        }
+        return cells + Array(repeating: "", count: columnCount - cells.count)
     }
 }
 
@@ -1012,9 +1334,9 @@ private struct CodeBlockCard: View {
                 HStack(spacing: 6) {
                     // Traffic-light dots
                     HStack(spacing: 5) {
-                        Circle().fill(Color(red: 1.00, green: 0.373, blue: 0.341).opacity(0.8)).frame(width: 8, height: 8)
-                        Circle().fill(Color(red: 0.996, green: 0.737, blue: 0.180).opacity(0.8)).frame(width: 8, height: 8)
-                        Circle().fill(Color(red: 0.157, green: 0.784, blue: 0.251).opacity(0.8)).frame(width: 8, height: 8)
+                        Circle().fill(Color.secondary.opacity(0.35)).frame(width: 8, height: 8)
+                        Circle().fill(Color.secondary.opacity(0.35)).frame(width: 8, height: 8)
+                        Circle().fill(Color.secondary.opacity(0.35)).frame(width: 8, height: 8)
                     }
 
                     Rectangle()

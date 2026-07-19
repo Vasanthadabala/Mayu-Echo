@@ -10,14 +10,38 @@ nonisolated protocol LLMEngine: Sendable {
     func streamChat(
         messages: [LLMMessage],
         model: LLMModel,
-        options: LLMGenerationOptions
+        options: LLMGenerationOptions,
+        toolsEnabled: Bool
     ) async -> AsyncThrowingStream<LLMStreamEvent, Error>
 
     func cancel() async
 }
 
+extension LLMEngine {
+    /// Convenience for callers that don't care about tool-calling.
+    func streamChat(
+        messages: [LLMMessage],
+        model: LLMModel,
+        options: LLMGenerationOptions
+    ) async -> AsyncThrowingStream<LLMStreamEvent, Error> {
+        await streamChat(messages: messages, model: model, options: options, toolsEnabled: false)
+    }
+}
+
+nonisolated struct ToolCallRequest: Sendable, Hashable, Codable, Identifiable {
+    let id: String
+    let name: String
+    let argumentsJSON: String
+}
+
 enum LLMStreamEvent: Sendable, Hashable {
     case token(String)
+    /// Fired on every incremental fragment of a tool call while it's still streaming in,
+    /// so the UI can show a live preview (e.g. a file edit's content growing) before the
+    /// call is complete. `argumentsJSON` is the accumulated-so-far raw JSON, which is not
+    /// guaranteed to be valid/parseable until the call finishes.
+    case toolCallProgress(index: Int, name: String?, argumentsJSON: String)
+    case toolCalls([ToolCallRequest])
     case completed
 }
 

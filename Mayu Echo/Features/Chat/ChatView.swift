@@ -23,14 +23,15 @@ struct ChatView: View {
     @State private var isSearchPresented = false
     @State private var sidebarMode: SidebarMode = .home
     @State private var expandedCodePaths: Set<String> = []
-    @State private var selectedCodeFilePath: String?
 
     private var projects: [Item] {
         items.filter(\.isProject)
     }
 
+    /// Standalone chats shown in the Chat tab. Project-scoped chats live under their
+    /// folder in the Code tab, not here.
     private var chats: [Item] {
-        items.filter { !$0.isProject }
+        items.filter { !$0.isProject && $0.parentProjectPath == nil }
     }
 
     private var settingsAvailableModels: [LLMModel] {
@@ -54,12 +55,6 @@ struct ChatView: View {
                     ChatDetailView(item: selectedItem, ensureChat: ensureChatForDetail)
                 case .aiModels:
                     AIModelsView(backAction: { selectedDestination = .chat })
-                case .codeFile:
-                    if let selectedCodeFilePath {
-                        CodeFileViewerView(filePath: selectedCodeFilePath)
-                    } else {
-                        ChatDetailView(item: selectedItem, ensureChat: ensureChatForDetail)
-                    }
                 }
             }
             .toolbar(selectedDestination == .settings ? .hidden : .automatic, for: .windowToolbar)
@@ -148,13 +143,22 @@ struct ChatView: View {
                                     ForEach(projects) { project in
                                         ProjectCodeSection(
                                             project: project,
+                                            chats: chats(for: project),
                                             expandedPaths: $expandedCodePaths,
-                                            selectedFilePath: $selectedCodeFilePath,
-                                            selectFile: { path in
-                                                selectedCodeFilePath = path
-                                                selectedDestination = .codeFile
+                                            selectedChatID: selectedDestination == .chat ? selectedItemID : nil,
+                                            selectChat: { chat in
+                                                selectedDestination = .chat
+                                                selectedItemID = chat.persistentModelID
                                             },
-                                            removeProject: { deleteProject(project) }
+                                            deleteChat: { chat in deleteChat(chat) },
+                                            removeProject: { deleteProject(project) },
+                                            addChat: {
+                                                if let path = project.projectPath {
+                                                    expandedCodePaths.insert(path)
+                                                }
+                                                selectedDestination = .chat
+                                                _ = createChat(in: project)
+                                            }
                                         )
                                     }
                                 }
@@ -480,5 +484,4 @@ private enum DetailDestination: Equatable {
     case chat
     case aiModels
     case settings
-    case codeFile
 }
